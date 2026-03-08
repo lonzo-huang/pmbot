@@ -4,6 +4,7 @@ import { cn } from '@/utils/cn'
 import { MatrixModal } from '@/components/ui/MatrixModal'
 import { MatrixButton } from '@/components/ui/MatrixButton'
 import { MatrixInput } from '@/components/ui/MatrixInput'
+import { RPC_ENDPOINTS, CONTRACT_ADDRESSES, formatRpcError, withRetry } from '@/utils/rpcConfig'
 
 const navItems = [
   { id: 'dashboard', label: 'DASHBOARD', icon: '📊' },
@@ -25,6 +26,7 @@ export const Sidebar: React.FC = () => {
   const [seedPhrase, setSeedPhrase] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [connectionLog, setConnectionLog] = useState<string[]>([])
 
   const handleClick = (viewId: string) => {
     console.log('🖱️ [Sidebar] 按钮点击:', viewId)
@@ -39,11 +41,13 @@ export const Sidebar: React.FC = () => {
       }
     } else {
       setShowWalletModal(true)
+      setConnectionLog([])
     }
   }
 
   const handleConnect = async () => {
     setError(null)
+    setConnectionLog([])
 
     if (!seedPhrase.trim()) {
       setError('请输入助记词')
@@ -51,7 +55,7 @@ export const Sidebar: React.FC = () => {
       return
     }
 
-    // 验证助记词格式（12 或 24 个单词）
+    // 验证助记词格式
     const words = seedPhrase.trim().split(/\s+/)
     if (words.length !== 12 && words.length !== 24) {
       setError('助记词必须是 12 或 24 个单词')
@@ -62,20 +66,60 @@ export const Sidebar: React.FC = () => {
     setIsConnecting(true)
 
     try {
-      console.log('🔐 [Wallet] 开始连接钱包...')
+      logConnection('🔐 开始连接钱包...')
 
-      // 动态导入 ethers（避免 SSR 问题）
+      // 动态导入 ethers
       const { ethers } = await import('ethers')
 
-      // 使用 Polygon RPC
-      const provider = new ethers.JsonRpcProvider('https://polygon-rpc.com')
+      // ✅ 尝试多个 RPC 节点，直到成功
+      let provider: ethers.Provider | null = null
+      let connectedRpc = ''
 
-      // ✅ ethers v6 正确用法：fromPhrase
+      for (const rpc of RPC_ENDPOINTS) {
+        try {
+          logConnection(`🔄 尝试 RPC: ${rpc.name}`)
+
+          const testProvider = new ethers.JsonRpcProvider(
+            rpc.url,
+            {
+              chainId: 137,
+              name: 'polygon'
+            },
+            {
+              staticNetwork: true,
+              timeout: rpc.timeout
+            }
+          )
+
+          // 测试连接
+          await withRetry(
+            () => testProvider.getNetwork(),
+            2,
+            1000
+          )
+
+          provider = testProvider
+          connectedRpc = rpc.name
+          logConnection(`✅ RPC 连接成功：${rpc.name}`)
+          break
+        } catch (rpcError) {
+          const errorMsg = rpcError instanceof Error ? rpcError.message : '未知错误'
+          logConnection(`❌ RPC 失败：${rpc.name} - ${errorMsg}`)
+          console.warn(`❌ [Wallet] RPC 失败：${rpc.url}`, rpcError)
+          continue
+        }
+      }
+
+      if (!provider) {
+        throw new Error('所有 RPC 节点都不可用，请检查网络连接')
+      }
+
+      // 从助记词创建钱包
       let walletInstance: ethers.Wallet
 
       try {
         walletInstance = ethers.Wallet.fromPhrase(seedPhrase.trim(), provider)
-        console.log('✅ [Wallet] 钱包创建成功')
+        logConnection('✅ 钱包创建成功')
       } catch (phraseError) {
         console.error('助记词错误:', phraseError)
         throw new Error('助记词无效，请检查是否正确')
@@ -83,41 +127,64 @@ export const Sidebar: React.FC = () => {
 
       // 获取钱包地址
       const address = await walletInstance.getAddress()
-      console.log('📍 [Wallet] 钱包地址:', address)
+      logConnection(`📍 钱包地址：${address.slice(0, 6)}...${address.slice(-4)}`)
 
-      // 获取 MATIC 余额（用于 Gas）
-      const maticBalance = await provider.getBalance(address)
-      const maticBalanceFormatted = Number(ethers.formatEther(maticBalance))
+      // 获取余额（先获取 MATIC，再获取 USDC）
+      let usdcBalance = 0
+      let maticBalance = 0
 
-      // 获取 USDC 余额
-      const usdcAddress = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
-      const usdcAbi = ['function balanceOf(address) view returns (uint256)']
-      const usdcContract = new ethers.Contract(usdcAddress, usdcAbi, provider)
-      const usdcBalance = await usdcContract.balanceOf(address)
-      const usdcBalanceFormatted = Number(ethers.formatUnits(usdcBalance, 6))
+      try {
+        // 获取 MATIC 余额
+        const maticBalanceBig = await provider.getBalance(address)
+        maticBalance = Number(ethers.formatEther(maticBalanceBig))
+        logConnection(`💰 MATIC 余额：${maticBalance.toFixed(4)} MATIC`)
+      } catch (balanceError) {
+        console.warn('获取 MATIC 余额失败:', balanceError)
+      }
 
-      console.log('💰 [Wallet] MATIC 余额:', maticBalanceFormatted)
-      console.log('💰 [Wallet] USDC 余额:', usdcBalanceFormatted)
+      try {
+        // 获取 USDC 余额
+        const usdcAbi = ['function balanceOf(address) view returns (uint256)']
+        const usdcContract = new ethers.Contract(CONTRACT_ADDRESSES.USDC, usdcAbi, provider)
+        const usdcBalanceBig = await usdcContract.balanceOf(address)
+        usdcBalance = Number(ethers.formatUnits(usdcBalanceBig, 6))
+        logConnection(`💰 USDC 余额：$${usdcBalance.toFixed(2)}`)
+      } catch (balanceError) {
+        console.warn('获取 USDC 余额失败:', balanceError)
+        usdcBalance = 0
+      }
+
+      // 检查余额是否充足
+      if (usdcBalance === 0 && maticBalance === 0) {
+        logConnection('⚠️ 警告：钱包余额为 0，请充值后再交易')
+      }
 
       // 连接到 store
-      connectWallet(address, usdcBalanceFormatted)
+      connectWallet(address, usdcBalance)
 
-      addNotification(
-        `钱包已连接：${address.slice(0, 6)}...${address.slice(-4)} | USDC: $${usdcBalanceFormatted.toFixed(2)}`,
-        'success'
-      )
+      const notificationMsg = `钱包已连接：${address.slice(0, 6)}...${address.slice(-4)} | USDC: $${usdcBalance.toFixed(2)} | MATIC: ${maticBalance.toFixed(4)}`
+      addNotification(notificationMsg, 'success')
+      logConnection(`✅ 连接完成！${notificationMsg}`)
 
       setShowWalletModal(false)
       setSeedPhrase('')
+      setConnectionLog([])
 
     } catch (error) {
       console.error('❌ [Wallet] 连接失败:', error)
       const errorMessage = error instanceof Error ? error.message : '连接失败'
-      setError(errorMessage)
-      addNotification(`钱包连接失败：${errorMessage}`, 'error')
+      const friendlyMessage = formatRpcError(error)
+      setError(friendlyMessage)
+      logConnection(`❌ 连接失败：${friendlyMessage}`)
+      addNotification(`钱包连接失败：${friendlyMessage}`, 'error')
     } finally {
       setIsConnecting(false)
     }
+  }
+
+  const logConnection = (message: string) => {
+    console.log(`[Wallet] ${message}`)
+    setConnectionLog((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`])
   }
 
   const formatAddress = (address: string | null) => {
@@ -213,6 +280,7 @@ export const Sidebar: React.FC = () => {
             <MatrixButton
               variant="secondary"
               onClick={() => setShowWalletModal(false)}
+              disabled={isConnecting}
             >
               取消
             </MatrixButton>
@@ -237,12 +305,37 @@ export const Sidebar: React.FC = () => {
             placeholder="word1 word2 word3 ... word12"
             label="助记词"
             error={error || undefined}
+            disabled={isConnecting}
           />
+
+          {/* 连接日志 */}
+          {connectionLog.length > 0 && (
+            <div className="text-xs font-mono p-3 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary max-h-40 overflow-y-auto">
+              {connectionLog.map((log, index) => (
+                <div
+                  key={index}
+                  className={cn(
+                    'py-1',
+                    log.includes('✅') ? 'text-matrix-success' :
+                    log.includes('❌') ? 'text-matrix-error' :
+                    log.includes('⚠️') ? 'text-matrix-warning' :
+                    'text-matrix-text-secondary'
+                  )}
+                >
+                  {log}
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="text-xs text-matrix-warning font-mono p-3 border border-matrix-warning/30 rounded bg-matrix-warning/10">
             ⚠️ 安全提示：助记词仅存储在本地，不会上传到任何服务器。但仍建议使用专用测试钱包。
           </div>
           <div className="text-xs text-matrix-info font-mono p-3 border border-matrix-info/30 rounded bg-matrix-info/10">
             💡 提示：需要 Polygon 网络上的 USDC 余额才能交易。请确保钱包有足够余额。
+          </div>
+          <div className="text-xs text-matrix-text-muted font-mono p-3 border border-matrix-border-tertiary rounded bg-matrix-bg-accent">
+            🔧 支持 RPC 节点：{RPC_ENDPOINTS.map(r => r.name).join('、')}
           </div>
         </div>
       </MatrixModal>
