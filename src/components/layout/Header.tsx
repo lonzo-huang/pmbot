@@ -4,7 +4,7 @@ import { cn } from '@/utils/cn'
 import { MatrixButton } from '@/components/ui/MatrixButton'
 
 export const Header: React.FC = () => {
-  const { ui, trading, setTradingActive, addNotification } = useAppStore()
+  const { trading, setTradingActive, addNotification } = useAppStore()
 
   const toggleTrading = () => {
     const newState = !trading.isActive
@@ -16,28 +16,19 @@ export const Header: React.FC = () => {
   }
 
   return (
-    <header className="h-16 border-b border-matrix-border-tertiary bg-matrix-bg-secondary/50 backdrop-blur flex items-center justify-between px-6">
+    // ✅ 关键：添加正确的背景和边框
+    <header className="h-16 border-b border-matrix-border-tertiary bg-matrix-bg-secondary/80 backdrop-blur flex items-center justify-between px-6" style={{ zIndex: 20 }}>
       {/* Left - Status Indicators */}
       <div className="flex items-center space-x-4">
         <div className="flex items-center space-x-2">
-          <div
-            className={cn(
-              'w-2 h-2 rounded-full',
-              ui.connectionStatus === 'online' ? 'bg-matrix-success' : 'bg-matrix-error'
-            )}
-          />
+          <div className={cn('w-2 h-2 rounded-full', 'bg-matrix-error')} />
           <span className="text-xs text-matrix-text-secondary font-mono">
-            {ui.connectionStatus?.toUpperCase() || 'OFFLINE'}
+            OFFLINE
           </span>
         </div>
 
         <div className="flex items-center space-x-2">
-          <div
-            className={cn(
-              'w-2 h-2 rounded-full',
-              trading.isActive ? 'bg-matrix-success animate-pulse' : 'bg-matrix-warning'
-            )}
-          />
+          <div className={cn('w-2 h-2 rounded-full', trading.isActive ? 'bg-matrix-success animate-pulse' : 'bg-matrix-warning')} />
           <span className="text-xs text-matrix-text-secondary font-mono">
             {trading.isActive ? 'TRADING ACTIVE' : 'TRADING PAUSED'}
           </span>
@@ -63,7 +54,7 @@ export const Header: React.FC = () => {
       <div className="flex items-center space-x-3">
         <MatrixButton
           size="sm"
-          variant={trading.isActive ? 'danger' : 'primary'}
+          variant={trading.isActive ? 'danger' : 'success'}
           onClick={toggleTrading}
         >
           {trading.isActive ? 'STOP' : 'START'}

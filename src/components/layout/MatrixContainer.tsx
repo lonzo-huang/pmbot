@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { cn } from '@/utils/cn'
 
 interface MatrixContainerProps {
@@ -12,68 +12,109 @@ export const MatrixContainer: React.FC<MatrixContainerProps> = ({
   className,
   showRain = true,
 }) => {
-  const [columns, setColumns] = useState<string[]>([])
+  const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
-    const chars = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン'
-    const columnCount = Math.floor(window.innerWidth / 20)
+    const canvas = canvasRef.current
+    if (!canvas) return
 
-    const newColumns = Array.from({ length: columnCount }, (_, i) => {
-      const char = chars[Math.floor(Math.random() * chars.length)]
-      const delay = Math.random() * 10
-      const duration = 8 + Math.random() * 4
-      return `${char}|${delay}|${duration}`
-    })
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
 
-    setColumns(newColumns)
+    // 设置画布尺寸为全屏
+    const resizeCanvas = () => {
+      canvas.width = window.innerWidth
+      canvas.height = window.innerHeight
+    }
+    resizeCanvas()
+    window.addEventListener('resize', resizeCanvas)
 
-    const handleResize = () => {
-      const newColumnCount = Math.floor(window.innerWidth / 20)
-      if (newColumnCount !== columns.length) {
-        setColumns(
-          Array.from({ length: newColumnCount }, (_, i) => {
-            const char = chars[Math.floor(Math.random() * chars.length)]
-            const delay = Math.random() * 10
-            const duration = 8 + Math.random() * 4
-            return `${char}|${delay}|${duration}`
-          })
-        )
-      }
+    // ===== 黑客帝国雨效果配置 =====
+    const config = {
+      fontSize: 16,                    // 字体大小
+      columnSpacing: 18,               // 列间距（越小越密集）
+      fallSpeed: 1,                 // 下落速度（像素/帧）
+      characters: '01',                // 使用 0 和 1
+      fadeOpacity: 0.05,               // 背景淡出速度（越小拖尾越长）
+      headBrightness: 1.0,             // 头部亮度
+      tailBrightness: 0.3,             // 尾部亮度
     }
 
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [columns.length])
+    // 计算列数
+    const columns = Math.floor(canvas.width / config.columnSpacing)
+
+    // 初始化每列的 Y 位置（随机分布在屏幕上方）
+    const drops: number[] = []
+    for (let i = 0; i < columns; i++) {
+      drops[i] = Math.random() * -100  // 从屏幕上方不同位置开始
+    }
+
+    // 动画循环
+    let animationId: number
+    const animate = () => {
+      // 半透明黑色背景（创建拖尾效果）
+      ctx.fillStyle = `rgba(0, 0, 0, ${config.fadeOpacity})`
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+      // 设置字体样式
+      ctx.font = `${config.fontSize}px 'JetBrains Mono', monospace`
+
+      // 绘制每一列
+      for (let i = 0; i < drops.length; i++) {
+        // 随机选择 0 或 1
+        const char = Math.random() > 0.5 ? '0' : '1'
+
+        // 计算 X 位置
+        const x = i * config.columnSpacing
+
+        // 计算 Y 位置
+        const y = drops[i] * config.fontSize
+
+        // 绘制字符（带发光效果）
+        ctx.fillStyle = '#00ff00'
+        ctx.shadowBlur = 8
+        ctx.shadowColor = '#00ff00'
+        ctx.fillText(char, x, y)
+        ctx.shadowBlur = 0
+
+        // 更新下落位置
+        // 随机重置到顶部（当超出屏幕时）
+        if (y > canvas.height && Math.random() > 0.975) {
+          drops[i] = 0
+        } else {
+          drops[i]++
+        }
+      }
+
+      animationId = requestAnimationFrame(animate)
+    }
+
+    // 启动动画
+    animate()
+
+    // 清理
+    return () => {
+      cancelAnimationFrame(animationId)
+      window.removeEventListener('resize', resizeCanvas)
+    }
+  }, [])
 
   return (
-    <div className={cn('relative min-h-screen bg-matrix-bg-primary text-matrix-text-primary font-mono', className)}>
-      {/* Matrix Rain Background */}
+    <div className={cn('relative min-h-screen bg-black text-green-400 font-mono', className)}>
+      {/* Matrix Rain Background - Canvas 渲染 */}
       {showRain && (
-        <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-          {columns.map((column, index) => {
-            const [char, delay, duration] = column.split('|')
-            return (
-              <span
-                key={index}
-                className="absolute text-matrix-text-tertiary opacity-20 text-sm"
-                style={{
-                  left: `${(index / columns.length) * 100}%`,
-                  top: '-100px',
-                  animation: `matrix-rain ${duration}s linear infinite`,
-                  animationDelay: `${delay}s`,
-                }}
-              >
-                {Array.from({ length: 50 }, (_, i) => (
-                  <div key={i}>{char}</div>
-                ))}
-              </span>
-            )
-          })}
-        </div>
+        <canvas
+          ref={canvasRef}
+          className="fixed inset-0 pointer-events-none"
+          style={{
+            zIndex: 0,
+            background: '#000000'
+          }}
+        />
       )}
 
       {/* Content */}
-      <div className="relative z-10">
+      <div className="relative" style={{ zIndex: 10 }}>
         {children}
       </div>
     </div>

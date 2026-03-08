@@ -8,14 +8,26 @@
     <meta name="theme-color" content="#000000" />
     <meta name="msapplication-TileColor" content="#000000" />
     
-    <!-- Security Headers -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.polymarket.com https://*.openrouter.ai wss://*.polymarket.com; img-src 'self' https:; font-src 'self' https:;" />
-    
+    <!-- ✅ 修复后的 Security Headers - 添加了 polygon-rpc.com -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self' 'unsafe-inline' 'unsafe-eval';
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      connect-src 'self'
+        https://polygon-rpc.com
+        https://*.polymarket.com
+        https://*.openrouter.ai
+        wss://*.polymarket.com;
+      img-src 'self' https: data:;
+      font-src 'self' https://fonts.gstatic.com data:;
+    " />
+
     <!-- Preconnect to APIs -->
     <link rel="preconnect" href="https://gamma-api.polymarket.com" />
     <link rel="preconnect" href="https://clob.polymarket.com" />
     <link rel="preconnect" href="https://data-api.polymarket.com" />
     <link rel="preconnect" href="https://openrouter.ai" />
+    <link rel="preconnect" href="https://polygon-rpc.com" />
     
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

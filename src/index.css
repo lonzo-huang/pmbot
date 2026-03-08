@@ -13,6 +13,14 @@ body {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   background-color: var(--matrix-darker);
   color: var(--matrix-green);
+  overflow: hidden; /* ✅ 防止页面滚动 */
+}
+
+/* ✅ 确保根容器占满屏幕 */
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* Matrix 雨效果 */
@@ -40,7 +48,7 @@ body {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  z-index: 0;
+  z-index: 0; /* ✅ 确保在最底层 */
   overflow: hidden;
 }
 
@@ -123,4 +131,53 @@ body {
     transparent
   );
   animation: data-stream 1.5s ease-in-out infinite;
+}
+
+/* ==========================================
+   ✅ 布局修复 - 防止侧边栏重叠
+   ========================================== */
+
+/* 确保按钮可点击 */
+button {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+  position: relative;
+  z-index: 10;
+}
+
+/* 确保侧边栏在最上层 */
+.sidebar-container,
+nav {
+  z-index: 100 !important;
+  position: relative;
+}
+
+/* 主内容区域 - 给侧边栏留空间 */
+.main-content {
+  margin-left: 16rem; /* 64 = 256px = 侧边栏宽度 */
+  width: calc(100vw - 16rem);
+}
+
+/* 卡片容器修复 */
+.matrix-card {
+  position: relative;
+  z-index: 10;
+}
+
+/* 确保内容不被侧边栏覆盖 */
+.content-wrapper {
+  margin-left: 16rem;
+  min-height: 100vh;
+}
+
+/* Header 固定在最上层 */
+header {
+  z-index: 20 !important;
+  position: relative;
+}
+
+/* Matrix Container 内容层 */
+.matrix-container-content {
+  position: relative;
+  z-index: 10;
 }
