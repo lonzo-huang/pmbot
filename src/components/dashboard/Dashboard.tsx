@@ -42,7 +42,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex justify-between">
               <span className="text-matrix-text-secondary">Balance:</span>
               <span className="text-matrix-text-primary">
-                ${wallet.balance.toFixed(2)}
+                ${(wallet.balance ?? 0).toFixed(2)}  {/* ✅ 添加空值检查 */}
               </span>
             </div>
             <div className="flex justify-between">
@@ -83,31 +83,31 @@ export const Dashboard: React.FC = () => {
             <div className="flex justify-between">
               <span className="text-matrix-text-secondary">Active:</span>
               <span className="text-matrix-text-primary">
-                {positions.active.length}
+                {positions.active?.length ?? 0}  {/* ✅ 添加空值检查 */}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-matrix-text-secondary">Total P&L:</span>
               <span
                 className={
-                  positions.pnl.total >= 0
+                  (positions.pnl?.total ?? 0) >= 0
                     ? 'text-matrix-success'
                     : 'text-matrix-error'
                 }
               >
-                ${positions.pnl.total.toFixed(2)}
+                ${(positions.pnl?.total ?? 0).toFixed(2)}  {/* ✅ 添加空值检查 */}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-matrix-text-secondary">Unrealized:</span>
               <span
                 className={
-                  positions.pnl.unrealized >= 0
+                  (positions.pnl?.unrealized ?? 0) >= 0
                     ? 'text-matrix-success'
                     : 'text-matrix-error'
                 }
               >
-                ${positions.pnl.unrealized.toFixed(2)}
+                ${(positions.pnl?.unrealized ?? 0).toFixed(2)}  {/* ✅ 添加空值检查 */}
               </span>
             </div>
           </div>
@@ -119,25 +119,25 @@ export const Dashboard: React.FC = () => {
             <div>
               <div className="text-matrix-text-secondary text-xs">Max Bet %</div>
               <div className="text-matrix-text-primary text-xl">
-                {settings.maxBetPercent}%
+                {settings.maxBetPercent ?? 5}%  {/* ✅ 添加空值检查 */}
               </div>
             </div>
             <div>
               <div className="text-matrix-text-secondary text-xs">Stop Loss</div>
               <div className="text-matrix-error text-xl">
-                {settings.stopLossPercent}%
+                {settings.stopLossPercent ?? 15}%  {/* ✅ 添加空值检查 */}
               </div>
             </div>
             <div>
               <div className="text-matrix-text-secondary text-xs">Take Profit</div>
               <div className="text-matrix-success text-xl">
-                {settings.takeProfitPercent}%
+                {settings.takeProfitPercent ?? 30}%  {/* ✅ 添加空值检查 */}
               </div>
             </div>
             <div>
               <div className="text-matrix-text-secondary text-xs">Daily Limit</div>
               <div className="text-matrix-error text-xl">
-                ${settings.maxDailyLoss}
+                ${settings.maxDailyLoss ?? 50}  {/* ✅ 添加空值检查 */}
               </div>
             </div>
           </div>
@@ -146,7 +146,7 @@ export const Dashboard: React.FC = () => {
 
       {/* Positions Table */}
       <PositionTable
-        positions={positions.active}
+        positions={positions.active ?? []}
         onSell={(tokenId) => console.log('Sell:', tokenId)}
       />
 
