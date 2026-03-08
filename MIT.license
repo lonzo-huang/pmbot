@@ -1,0 +1,81 @@
+
+---
+
+## 📁 src/components/ui/ 缺失文件
+
+### 3. `src/components/ui/MatrixButton.tsx`
+
+```typescript
+import React from 'react'
+import { cn } from '@/utils/cn'
+
+interface MatrixButtonProps {
+  variant?: 'primary' | 'secondary' | 'danger' | 'success' | 'warning'
+  size?: 'sm' | 'md' | 'lg'
+  loading?: boolean
+  disabled?: boolean
+  onClick: () => void
+  children: React.ReactNode
+  className?: string
+  fullWidth?: boolean
+  icon?: React.ReactNode
+}
+
+export const MatrixButton: React.FC<MatrixButtonProps> = ({
+  variant = 'primary',
+  size = 'md',
+  loading = false,
+  disabled = false,
+  onClick,
+  children,
+  className,
+  fullWidth = false,
+  icon,
+}) => {
+  const baseClasses = "font-mono border rounded transition-all duration-300 font-bold flex items-center justify-center gap-2"
+  
+  const sizeClasses = {
+    sm: "px-3 py-1.5 text-xs",
+    md: "px-4 py-2 text-sm",
+    lg: "px-6 py-3 text-base",
+  }
+  
+  const variantClasses = {
+    primary: "bg-matrix-bg-accent border-matrix-border-primary text-matrix-text-primary hover:bg-matrix-bg-tertiary hover:shadow-matrix-glow-normal",
+    secondary: "bg-matrix-bg-tertiary border-matrix-border-secondary text-matrix-text-secondary hover:border-matrix-border-primary hover:text-matrix-text-primary",
+    danger: "bg-matrix-error/20 border-matrix-border-error text-matrix-error hover:bg-matrix-error/30 hover:shadow-matrix-glow-error",
+    success: "bg-matrix-success/20 border-matrix-success text-matrix-success hover:bg-matrix-success/30 hover:shadow-matrix-glow-normal",
+    warning: "bg-matrix-warning/20 border-matrix-warning text-matrix-warning hover:bg-matrix-warning/30",
+  }
+  
+  return (
+    <button
+      className={cn(
+        baseClasses,
+        sizeClasses[size],
+        variantClasses[variant],
+        fullWidth && "w-full",
+        (disabled || loading) && "opacity-50 cursor-not-allowed",
+        !disabled && !loading && "cursor-pointer active:scale-95",
+        className
+      )}
+      onClick={onClick}
+      disabled={disabled || loading}
+      style={{
+        boxShadow: variant === 'primary' && !disabled ? '0 0 5px rgba(0, 255, 0, 0.3)' : 'none',
+      }}
+    >
+      {loading ? (
+        <>
+          <div className="w-4 h-4 border-2 border-matrix-text-primary border-t-transparent rounded-full animate-spin" />
+          <span className="animate-pulse">PROCESSING...</span>
+        </>
+      ) : (
+        <>
+          {icon && <span>{icon}</span>}
+          {children}
+        </>
+      )}
+    </button>
+  )
+}

@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --matrix-green: #00ff00;
+  --matrix-dark: #0a0a0a;
+  --matrix-darker: #000000;
+}
+
+body {
+  margin: 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  background-color: var(--matrix-darker);
+  color: var(--matrix-green);
+}
+
+/* Matrix 雨效果 */
+@keyframes matrix-rain {
+  0% {
+    transform: translateY(-100vh);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100vh);
+    opacity: 0;
+  }
+}
+
+.matrix-rain {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.matrix-rain span {
+  position: absolute;
+  color: rgba(0, 255, 0, 0.3);
+  font-size: 14px;
+  animation: matrix-rain 8s linear infinite;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--matrix-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--matrix-green);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00cc00;
+}
+
+/* 文本发光效果 */
+.text-glow {
+  text-shadow: 0 0 5px var(--matrix-green), 0 0 10px rgba(0, 255, 0, 0.5);
+}
+
+/* 边框发光效果 */
+.border-glow {
+  box-shadow: 0 0 5px var(--matrix-green), 0 0 10px rgba(0, 255, 0, 0.3);
+}
+
+/* 加载动画 */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 10px #00ff00;
+  }
+  50% {
+    box-shadow: 0 0 20px #00ff00;
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* 数据流效果 */
+@keyframes data-stream {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.matrix-loading-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 255, 0, 0.4),
+    transparent
+  );
+  animation: data-stream 1.5s ease-in-out infinite;
+}
