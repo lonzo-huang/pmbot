@@ -5,7 +5,7 @@ import { Header } from '@/components/layout/Header'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Dashboard } from '@/components/dashboard/Dashboard'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
-import { ActivityFeed } from '@/components/activity/ActivityFeed'
+import { ActivityFeed } from '@/components/dashboard/ActivityFeed'
 import { MarketsView } from '@/components/dashboard/MarketsView'
 import { PortfolioView } from '@/components/portfolio/PortfolioView'
 
