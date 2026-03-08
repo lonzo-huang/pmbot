@@ -154,15 +154,18 @@ export const useAppStore = create<AppStore>()(
       // Market Actions
       // ==========================================
       setMarkets: (markets) => {
+        console.log('📊 [Store] setMarkets:', markets.length)
         set({
           markets: {
             ...get().markets,
-            activeMarkets: markets ?? []
+            activeMarkets: markets ?? [],
+            lastScanTime: new Date()
           }
         })
       },
 
       setScanning: (isScanning) => {
+        console.log('🔍 [Store] setScanning:', isScanning)
         set({
           ui: {
             ...get().ui,

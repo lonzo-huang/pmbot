@@ -1,289 +1,236 @@
-import { EventEmitter } from 'events'
+/**
+ * Polymarket WebSocket 实时行情服务
+ * 基于官方文档：wss://ws-subscriptions-clob.polymarket.com/ws/market
+ */
 
-export interface PriceUpdate {
-  tokenId: string
-  marketId: string
-  price: number
-  bid: number
-  ask: number
-  volume: number
-  timestamp: number
+export interface MarketData {
+  type: 'book' | 'price_change' | 'tick_size_change' | 'last_trade_price' | 'best_bid_ask' | 'new_market' | 'market_resolved'
+  asset_id?: string
+  data?: any
+  timestamp?: number
 }
 
-export interface OrderBookUpdate {
-  tokenId: string
+export interface OrderBook {
   bids: Array<[number, number]>  // [price, size]
   asks: Array<[number, number]>
-  timestamp: number
+  last_update: number
 }
 
-export interface TradeUpdate {
-  tokenId: string
-  price: number
-  size: number
-  side: 'BUY' | 'SELL'
-  timestamp: number
-}
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
-interface WebSocketMessage {
-  type: 'price' | 'orderbook' | 'trade' | 'ping' | 'pong'
-  data: any
-}
-
-export class RealtimeService extends EventEmitter {
+export class RealtimeService {
   private ws: WebSocket | null = null
-  private wsUrl: string
-  private subscriptions: Set<string> = new Set()
-  private priceCache: Map<string, PriceUpdate> = new Map()
-  private orderBookCache: Map<string, OrderBookUpdate> = new Map()
+  private status: ConnectionStatus = 'disconnected'
+  private subscribedAssets: Set<string> = new Set()
+  private pingInterval: NodeJS.Timeout | null = null
+  private reconnectAttempts = 0
+  private maxReconnectAttempts = 5
+  private messageHandlers: Set<(data: MarketData) => void> = new Set()
   
-  private reconnectAttempts: number = 0
-  private maxReconnectAttempts: number = 10
-  private reconnectDelay: number = 1000
-  private pingInterval: number = 5000
-  private pingTimer: NodeJS.Timeout | null = null
-  private lastPongTime: number = 0
+  // WebSocket 端点
+  private readonly WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market'
   
-  private isConnected: boolean = false
-  private isConnecting: boolean = false
-  
-  constructor(wsUrl: string = 'wss://ws.polymarket.com') {
-    super()
-    this.wsUrl = wsUrl
-  }
-  
-  async connect(): Promise<void> {
-    if (this.isConnected || this.isConnecting) {
-      return
+  // 热门市场资产 ID（示例）
+  private readonly POPULAR_ASSETS = [
+    // BTC $100K by 2026
+    '21742633143463906290569050155826241533067272736897614950488156847949938836455',
+    '48331043336612883890938759509493159234755048973500640148014422747788308965732',
+  ]
+
+  /**
+   * 连接 WebSocket
+   */
+  async connect(): Promise<boolean> {
+    if (this.status === 'connected' || this.status === 'connecting') {
+      console.log('[RealtimeService] 已连接或正在连接')
+      return true
     }
-    
-    this.isConnecting = true
-    this.emit('connecting')
-    
-    return new Promise((resolve, reject) => {
+
+    return new Promise((resolve) => {
       try {
-        this.ws = new WebSocket(this.wsUrl)
-        
+        this.status = 'connecting'
+        console.log('[RealtimeService] 开始连接 WebSocket...')
+
+        this.ws = new WebSocket(this.WS_URL)
+
         this.ws.onopen = () => {
-          console.log('[WebSocket] Connected')
-          this.isConnected = true
-          this.isConnecting = false
+          console.log('[RealtimeService] ✅ WebSocket 连接成功')
+          this.status = 'connected'
           this.reconnectAttempts = 0
-          this.lastPongTime = Date.now()
-          this.startPingInterval()
-          this.emit('connected')
-          this.resubscribeAll()
-          resolve()
+          
+          // 启动心跳
+          this.startPing()
+          
+          // 发送订阅
+          this.subscribe(this.POPULAR_ASSETS)
+          
+          resolve(true)
         }
-        
+
         this.ws.onmessage = (event) => {
           this.handleMessage(event.data)
         }
-        
-        this.ws.onclose = (event) => {
-          console.log(`[WebSocket] Disconnected: ${event.code} ${event.reason}`)
-          this.isConnected = false
-          this.isConnecting = false
-          this.stopPingInterval()
-          this.emit('disconnected', { code: event.code, reason: event.reason })
-          this.attemptReconnect()
-        }
-        
+
         this.ws.onerror = (error) => {
-          console.error('[WebSocket] Error:', error)
-          this.emit('error', { error })
-          reject(error)
+          console.error('[RealtimeService] ❌ WebSocket 错误:', error)
+          this.status = 'error'
+          resolve(false)
         }
-        
-        // Connection timeout
+
+        this.ws.onclose = (event) => {
+          console.log('[RealtimeService] 🔌 WebSocket 关闭:', event.code, event.reason)
+          this.status = 'disconnected'
+          this.stopPing()
+          
+          // 自动重连
+          if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++
+            console.log(`[RealtimeService] ${this.reconnectAttempts}s 后重连...`)
+            setTimeout(() => this.connect(), this.reconnectAttempts * 1000)
+          }
+        }
+
+        // 连接超时
         setTimeout(() => {
-          if (this.isConnecting && !this.isConnected) {
-            reject(new Error('WebSocket connection timeout'))
+          if (this.status === 'connecting') {
+            console.error('[RealtimeService] ⏱️ 连接超时')
+            this.status = 'error'
+            resolve(false)
           }
         }, 10000)
-        
+
       } catch (error) {
-        this.isConnecting = false
-        reject(error)
+        console.error('[RealtimeService] 连接失败:', error)
+        this.status = 'error'
+        resolve(false)
       }
     })
   }
-  
-  private handleMessage(data: string): void {
-    try {
-      const message: WebSocketMessage = JSON.parse(data)
-      
-      switch (message.type) {
-        case 'price':
-          this.handlePriceUpdate(message.data)
-          break
-        case 'orderbook':
-          this.handleOrderBookUpdate(message.data)
-          break
-        case 'trade':
-          this.handleTradeUpdate(message.data)
-          break
-        case 'pong':
-          this.lastPongTime = Date.now()
-          break
-      }
-    } catch (error) {
-      console.error('[WebSocket] Failed to parse message:', error)
+
+  /**
+   * 断开连接
+   */
+  disconnect(): void {
+    this.stopPing()
+    this.subscribedAssets.clear()
+    
+    if (this.ws) {
+      this.ws.close()
+      this.ws = null
     }
+    
+    this.status = 'disconnected'
+    console.log('[RealtimeService] 已断开连接')
   }
-  
-  private handlePriceUpdate(data: any): void {
-    const update: PriceUpdate = {
-      tokenId: data.token_id,
-      marketId: data.market_id,
-      price: data.price,
-      bid: data.bid,
-      ask: data.ask,
-      volume: data.volume,
-      timestamp: data.timestamp || Date.now(),
-    }
-    
-    this.priceCache.set(update.tokenId, update)
-    this.emit('priceUpdate', update)
-  }
-  
-  private handleOrderBookUpdate(data: any): void {
-    const update: OrderBookUpdate = {
-      tokenId: data.token_id,
-      bids: data.bids,
-      asks: data.asks,
-      timestamp: data.timestamp || Date.now(),
-    }
-    
-    this.orderBookCache.set(update.tokenId, update)
-    this.emit('orderBookUpdate', update)
-  }
-  
-  private handleTradeUpdate(data: any): void {
-    const update: TradeUpdate = {
-      tokenId: data.token_id,
-      price: data.price,
-      size: data.size,
-      side: data.side,
-      timestamp: data.timestamp || Date.now(),
-    }
-    
-    this.emit('tradeUpdate', update)
-  }
-  
-  async subscribe(tokenId: string): Promise<void> {
-    if (!this.isConnected) {
-      throw new Error('WebSocket not connected')
-    }
-    
-    this.subscriptions.add(tokenId)
-    
-    const message = {
-      type: 'subscribe',
-      token_ids: [tokenId],
-    }
-    
-    this.ws?.send(JSON.stringify(message))
-    console.log(`[WebSocket] Subscribed to ${tokenId}`)
-  }
-  
-  async unsubscribe(tokenId: string): Promise<void> {
-    this.subscriptions.delete(tokenId)
-    
-    const message = {
-      type: 'unsubscribe',
-      token_ids: [tokenId],
-    }
-    
-    this.ws?.send(JSON.stringify(message))
-    console.log(`[WebSocket] Unsubscribed from ${tokenId}`)
-  }
-  
-  private async resubscribeAll(): Promise<void> {
-    for (const tokenId of this.subscriptions) {
-      await this.subscribe(tokenId)
-    }
-  }
-  
-  private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('[WebSocket] Max reconnection attempts reached')
-      this.emit('maxReconnectAttemptsReached')
+
+  /**
+   * 订阅市场
+   */
+  subscribe(assetIds: string[]): void {
+    if (this.status !== 'connected' || !this.ws) {
+      console.warn('[RealtimeService] 未连接，无法订阅')
       return
     }
+
+    const subscription = {
+      assets_ids: assetIds,
+      type: 'market',
+      custom_feature_enabled: true,
+    }
+
+    this.ws.send(JSON.stringify(subscription))
     
-    this.reconnectAttempts++
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1)
-    
-    console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
-    
-    setTimeout(async () => {
-      try {
-        await this.connect()
-      } catch (error) {
-        console.error('[WebSocket] Reconnection failed:', error)
-      }
-    }, delay)
+    assetIds.forEach(id => this.subscribedAssets.add(id))
+    console.log('[RealtimeService] 📡 已订阅市场:', assetIds.length, '个资产')
   }
-  
-  private startPingInterval(): void {
-    this.stopPingInterval()
+
+  /**
+   * 取消订阅
+   */
+  unsubscribe(assetIds: string[]): void {
+    if (this.status !== 'connected' || !this.ws) {
+      return
+    }
+
+    const unsubscription = {
+      assets_ids: assetIds,
+      operation: 'unsubscribe',
+    }
+
+    this.ws.send(JSON.stringify(unsubscription))
     
-    this.pingTimer = setInterval(() => {
-      if (!this.isConnected) return
-      
-      const timeSinceLastPong = Date.now() - this.lastPongTime
-      
-      if (timeSinceLastPong > this.pingInterval * 3) {
-        console.warn('[WebSocket] Connection stale, reconnecting...')
-        this.ws?.close()
+    assetIds.forEach(id => this.subscribedAssets.delete(id))
+    console.log('[RealtimeService] 🚫 已取消订阅:', assetIds.length, '个资产')
+  }
+
+  /**
+   * 启动心跳（每 10 秒发送 PING）
+   */
+  private startPing(): void {
+    this.stopPing()
+    
+    this.pingInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send('PING')
+        console.log('[RealtimeService] 💓 PING')
+      }
+    }, 10000)
+  }
+
+  /**
+   * 停止心跳
+   */
+  private stopPing(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval)
+      this.pingInterval = null
+    }
+  }
+
+  /**
+   * 处理接收到的消息
+   */
+  private handleMessage(data: string): void {
+    try {
+      // 处理 PONG 响应
+      if (data === 'PONG') {
+        console.log('[RealtimeService] 🏓 PONG')
         return
       }
-      
-      this.ws?.send(JSON.stringify({ type: 'ping' }))
-    }, this.pingInterval)
-  }
-  
-  private stopPingInterval(): void {
-    if (this.pingTimer) {
-      clearInterval(this.pingTimer)
-      this.pingTimer = null
+
+      const message: MarketData = JSON.parse(data)
+      console.log('[RealtimeService] 📨 收到消息:', message.type, message.asset_id ? message.asset_id.substring(0, 20) + '...' : '')
+
+      // 通知所有监听器
+      this.messageHandlers.forEach(handler => handler(message))
+
+    } catch (error) {
+      console.error('[RealtimeService] 消息解析失败:', error)
     }
   }
-  
-  getPrice(tokenId: string): PriceUpdate | null {
-    return this.priceCache.get(tokenId) || null
+
+  /**
+   * 添加消息监听器
+   */
+  onMessage(handler: (data: MarketData) => void): () => void {
+    this.messageHandlers.add(handler)
+    return () => this.messageHandlers.delete(handler)
   }
-  
-  getOrderBook(tokenId: string): OrderBookUpdate | null {
-    return this.orderBookCache.get(tokenId) || null
+
+  /**
+   * 获取连接状态
+   */
+  getStatus(): ConnectionStatus {
+    return this.status
   }
-  
-  getAllPrices(): Map<string, PriceUpdate> {
-    return new Map(this.priceCache)
-  }
-  
-  disconnect(): void {
-    this.stopPingInterval()
-    this.ws?.close()
-    this.ws = null
-    this.isConnected = false
-    this.subscriptions.clear()
-    this.priceCache.clear()
-    this.orderBookCache.clear()
-  }
-  
-  getStatus(): {
-    isConnected: boolean
-    subscriptions: number
-    cachedPrices: number
-    reconnectAttempts: number
-  } {
-    return {
-      isConnected: this.isConnected,
-      subscriptions: this.subscriptions.size,
-      cachedPrices: this.priceCache.size,
-      reconnectAttempts: this.reconnectAttempts,
-    }
+
+  /**
+   * 获取已订阅的资产
+   */
+  getSubscribedAssets(): string[] {
+    return Array.from(this.subscribedAssets)
   }
 }
+
+// 导出单例
+export const realtimeService = new RealtimeService()

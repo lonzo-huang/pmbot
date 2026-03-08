@@ -4,6 +4,9 @@ import { MatrixCard } from '@/components/ui/MatrixCard'
 import { MatrixButton } from '@/components/ui/MatrixButton'
 import { PositionTable } from './PositionTable'
 import { ActivityFeed } from './ActivityFeed'
+import { PnLStats } from './PnLStats'
+import { cn } from '@/utils/cn'
+import { formatCurrency } from '@/utils/formatting'
 
 export const Dashboard: React.FC = () => {
   const {
@@ -42,7 +45,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex justify-between">
               <span className="text-matrix-text-secondary">Balance:</span>
               <span className="text-matrix-text-primary">
-                ${(wallet.balance ?? 0).toFixed(2)}  {/* ✅ 添加空值检查 */}
+                ${(wallet.balance ?? 0).toFixed(2)}
               </span>
             </div>
             <div className="flex justify-between">
@@ -58,9 +61,10 @@ export const Dashboard: React.FC = () => {
             <div className="flex justify-between items-center">
               <span className="text-matrix-text-secondary font-mono">Status:</span>
               <span
-                className={`font-mono ${
+                className={cn(
+                  'font-mono',
                   trading.isActive ? 'text-matrix-success' : 'text-matrix-error'
-                }`}
+                )}
               >
                 {trading.isActive ? 'ACTIVE' : 'STOPPED'}
               </span>
@@ -83,31 +87,27 @@ export const Dashboard: React.FC = () => {
             <div className="flex justify-between">
               <span className="text-matrix-text-secondary">Active:</span>
               <span className="text-matrix-text-primary">
-                {positions.active?.length ?? 0}  {/* ✅ 添加空值检查 */}
+                {positions.active?.length ?? 0}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-matrix-text-secondary">Total P&L:</span>
               <span
-                className={
-                  (positions.pnl?.total ?? 0) >= 0
-                    ? 'text-matrix-success'
-                    : 'text-matrix-error'
-                }
+                className={cn(
+                  (positions.pnl?.total ?? 0) >= 0 ? 'text-matrix-success' : 'text-matrix-error'
+                )}
               >
-                ${(positions.pnl?.total ?? 0).toFixed(2)}  {/* ✅ 添加空值检查 */}
+                ${(positions.pnl?.total ?? 0).toFixed(2)}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-matrix-text-secondary">Unrealized:</span>
               <span
-                className={
-                  (positions.pnl?.unrealized ?? 0) >= 0
-                    ? 'text-matrix-success'
-                    : 'text-matrix-error'
-                }
+                className={cn(
+                  (positions.pnl?.unrealized ?? 0) >= 0 ? 'text-matrix-success' : 'text-matrix-error'
+                )}
               >
-                ${(positions.pnl?.unrealized ?? 0).toFixed(2)}  {/* ✅ 添加空值检查 */}
+                ${(positions.pnl?.unrealized ?? 0).toFixed(2)}
               </span>
             </div>
           </div>
@@ -119,35 +119,38 @@ export const Dashboard: React.FC = () => {
             <div>
               <div className="text-matrix-text-secondary text-xs">Max Bet %</div>
               <div className="text-matrix-text-primary text-xl">
-                {settings.maxBetPercent ?? 5}%  {/* ✅ 添加空值检查 */}
+                {settings.maxBetPercent ?? 5}%
               </div>
             </div>
             <div>
               <div className="text-matrix-text-secondary text-xs">Stop Loss</div>
               <div className="text-matrix-error text-xl">
-                {settings.stopLossPercent ?? 15}%  {/* ✅ 添加空值检查 */}
+                {settings.stopLossPercent ?? 15}%
               </div>
             </div>
             <div>
               <div className="text-matrix-text-secondary text-xs">Take Profit</div>
               <div className="text-matrix-success text-xl">
-                {settings.takeProfitPercent ?? 30}%  {/* ✅ 添加空值检查 */}
+                {settings.takeProfitPercent ?? 30}%
               </div>
             </div>
             <div>
               <div className="text-matrix-text-secondary text-xs">Daily Limit</div>
               <div className="text-matrix-error text-xl">
-                ${settings.maxDailyLoss ?? 50}  {/* ✅ 添加空值检查 */}
+                ${settings.maxDailyLoss ?? 50}
               </div>
             </div>
           </div>
         </MatrixCard>
       </div>
 
+      {/* PnL Stats - 新增 */}
+      <PnLStats />
+
       {/* Positions Table */}
       <PositionTable
         positions={positions.active ?? []}
-        onSell={(tokenId) => console.log('Sell:', tokenId)}
+        onSell={(tokenId) => addNotification(`卖出：${tokenId}`, 'info')}
       />
 
       {/* Activity Feed */}
