@@ -132,7 +132,9 @@ export const useAppStore = create<AppStore>()(
         set({ wallet: { ...initialState.wallet } })
       },
 
+      // ✅ 新增：单独更新余额（用于定时同步）
       updateBalance: (balance) => {
+        console.log('💰 [Store] updateBalance:', balance)
         set({
           wallet: {
             ...get().wallet,

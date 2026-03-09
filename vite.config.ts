@@ -22,7 +22,22 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true,
-    host: true
+    host: true,
+    // ✅ 添加 API 代理，绑过 CSP 限制
+    proxy: {
+      '/api/gamma': {
+        target: 'https://gamma-api.polymarket.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/gamma/, ''),
+        secure: true,
+      },
+      '/api/clob': {
+        target: 'https://clob.polymarket.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/clob/, ''),
+        secure: true,
+      },
+    },
   },
   build: {
     outDir: 'dist',
