@@ -1,9 +1,7 @@
 /**
  * Polymarket WebSocket 实时行情服务
- *
- * 放置位置: src/services/realtime/RealtimeService.ts
- *
- * 修复版本：增强消息解析、错误处理、策略回调支持
+ * 放置位置：src/services/realtime/RealtimeService.ts
+ * 修复版本：增强消息解析、错误处理、策略回调支持、防重复连接
  */
 
 export interface MarketData {
@@ -71,6 +69,9 @@ export class RealtimeService {
   private priceHistory: Map<string, number[]> = new Map()
   private orderBooks: Map<string, OrderBook> = new Map()
 
+  // ✅ 新增：防止重复连接
+  private connectPromise: Promise<boolean> | null = null
+
   // WebSocket 端点
   private readonly WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market'
 
@@ -81,18 +82,26 @@ export class RealtimeService {
   ]
 
   /**
-   * 连接 WebSocket
+   * 连接 WebSocket - 修复重复连接问题
    */
   async connect(): Promise<boolean> {
-    if (this.status === 'connected' || this.status === 'connecting') {
-      console.log('[RealtimeService] 已连接或正在连接')
+    // ✅ 如果已连接，直接返回
+    if (this.status === 'connected') {
+      console.log('[RealtimeService] ✅ 已连接')
       return true
     }
 
-    return new Promise((resolve) => {
+    // ✅ 如果正在连接中，返回现有 Promise
+    if (this.status === 'connecting' && this.connectPromise) {
+      console.log('[RealtimeService] ⏳ 正在连接中，等待完成...')
+      return this.connectPromise
+    }
+
+    // ✅ 创建新的连接 Promise
+    this.connectPromise = new Promise((resolve) => {
       try {
         this.status = 'connecting'
-        console.log('[RealtimeService] 开始连接 WebSocket...')
+        console.log('[RealtimeService] 🔌 开始连接 WebSocket...')
 
         this.ws = new WebSocket(this.WS_URL)
 
@@ -100,9 +109,15 @@ export class RealtimeService {
           console.log('[RealtimeService] ✅ WebSocket 连接成功')
           this.status = 'connected'
           this.reconnectAttempts = 0
+          this.connectPromise = null  // ✅ 清除 Promise
 
-          this.startPing()
-          this.subscribe(this.POPULAR_ASSETS)
+          // ✅ 延迟启动，确保 WebSocket 完全就绪（800ms）
+          setTimeout(() => {
+            this.startPing()
+            if (this.subscribedAssets.size > 0) {
+              this.subscribe(Array.from(this.subscribedAssets))
+            }
+          }, 800)
 
           resolve(true)
         }
@@ -112,61 +127,80 @@ export class RealtimeService {
         }
 
         this.ws.onerror = (error) => {
-          console.error('[RealtimeService] ❌ WebSocket 错误:', error)
+          console.error('[RealtimeService] ❌ WebSocket 错误')
           this.status = 'error'
-          resolve(false)
+          // ✅ 不立即 resolve，等待 onclose 处理
         }
 
         this.ws.onclose = (event) => {
-          console.log('[RealtimeService] 🔌 WebSocket 关闭:', event.code, event.reason)
+          console.log('[RealtimeService] 🔌 WebSocket 关闭:', event.code)
           this.status = 'disconnected'
           this.stopPing()
+          this.connectPromise = null  // ✅ 清除 Promise
 
-          if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          // ✅ 只在非正常关闭时重连
+          if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++
             console.log(`[RealtimeService] ${this.reconnectAttempts}s 后重连...`)
-            setTimeout(() => this.connect(), this.reconnectAttempts * 1000)
+            setTimeout(() => {
+              this.connectPromise = null
+              this.connect()
+            }, this.reconnectAttempts * 1000)
           }
         }
 
+        // ✅ 15 秒超时
         setTimeout(() => {
           if (this.status === 'connecting') {
             console.error('[RealtimeService] ⏱️ 连接超时')
             this.status = 'error'
+            this.connectPromise = null  // ✅ 清除 Promise
             resolve(false)
           }
-        }, 10000)
+        }, 15000)
 
       } catch (error) {
         console.error('[RealtimeService] 连接失败:', error)
         this.status = 'error'
+        this.connectPromise = null  // ✅ 清除 Promise
         resolve(false)
       }
     })
+
+    return this.connectPromise
   }
 
   /**
-   * 断开连接
+   * 断开连接 - 添加清除 Promise
    */
   disconnect(): void {
     this.stopPing()
     this.subscribedAssets.clear()
 
     if (this.ws) {
-      this.ws.close()
+      this.ws.close(1000)  // ✅ 正常关闭代码
       this.ws = null
     }
 
     this.status = 'disconnected'
+    this.connectPromise = null  // ✅ 清除 Promise
     console.log('[RealtimeService] 已断开连接')
   }
 
   /**
-   * 订阅市场
+   * 订阅市场 - 修复订阅时机
    */
   subscribe(assetIds: string[]): void {
-    if (this.status !== 'connected' || !this.ws) {
-      console.warn('[RealtimeService] 未连接，无法订阅')
+    // ✅ 检查连接状态
+    if (this.status !== 'connected') {
+      console.warn('[RealtimeService] ⚠️ 未连接，无法订阅')
+      return
+    }
+
+    // ✅ 检查 WebSocket 就绪状态
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('[RealtimeService] ⚠️ WebSocket 未就绪，延迟订阅')
+      setTimeout(() => this.subscribe(assetIds), 500)
       return
     }
 
@@ -176,10 +210,13 @@ export class RealtimeService {
       custom_feature_enabled: true,
     }
 
-    this.ws.send(JSON.stringify(subscription))
-
-    assetIds.forEach(id => this.subscribedAssets.add(id))
-    console.log('[RealtimeService] 📡 已订阅市场:', assetIds.length, '个资产')
+    try {
+      this.ws.send(JSON.stringify(subscription))
+      assetIds.forEach(id => this.subscribedAssets.add(id))
+      console.log('[RealtimeService] 📡 已订阅市场:', assetIds.length, '个资产')
+    } catch (e: any) {
+      console.error('[RealtimeService] ❌ 订阅失败:', e.message)
+    }
   }
 
   /**
@@ -196,7 +233,6 @@ export class RealtimeService {
     }
 
     this.ws.send(JSON.stringify(unsubscription))
-
     assetIds.forEach(id => this.subscribedAssets.delete(id))
     console.log('[RealtimeService] 🚫 已取消订阅:', assetIds.length, '个资产')
   }
@@ -206,7 +242,6 @@ export class RealtimeService {
    */
   private startPing(): void {
     this.stopPing()
-
     this.pingInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send('PING')
@@ -230,9 +265,15 @@ export class RealtimeService {
    */
   private handleMessage(rawData: string): void {
     try {
-      // 处理 PONG 响应
+      // ✅ 处理 PONG 响应
       if (rawData === 'PONG') {
         console.log('[RealtimeService] 🏓 PONG')
+        return
+      }
+
+      // ✅ 忽略错误消息（不尝试解析）
+      if (rawData.includes('INVALID') || rawData.includes('ERROR')) {
+        console.debug('[RealtimeService] 服务器消息:', rawData)
         return
       }
 
@@ -241,30 +282,31 @@ export class RealtimeService {
       try {
         parsed = JSON.parse(rawData)
       } catch {
-        console.warn('[RealtimeService] 非 JSON 消息:', rawData.substring(0, 100))
+        // ✅ 忽略非 JSON 消息（可能是服务器状态消息）
+        console.debug('[RealtimeService] 非 JSON 消息:', rawData.substring(0, 50))
         return
       }
 
       // ✅ 处理数组格式的消息（Polymarket 可能返回数组）
       const messages = Array.isArray(parsed) ? parsed : [parsed]
-
       for (const msg of messages) {
         const marketData = this.normalizeMessage(msg)
-
-        if (marketData) {
+        if (marketData && marketData.type !== 'unknown') {
           // 更新内部状态
           this.updateInternalState(marketData)
 
           // 获取资产 ID
           const assetId = marketData.asset_id || marketData.market || ''
 
-          // 打印日志（更详细）
-          console.log(
-            '[RealtimeService] 📨 收到消息:',
-            marketData.type || 'unknown',
-            assetId ? assetId.substring(0, 16) + '...' : '(无资产ID)',
-            marketData.data ? '有数据' : ''
-          )
+          // ✅ 只在有有效数据时打印日志
+          if (marketData.data) {
+            console.debug(
+              '[RealtimeService] 📨',
+              marketData.type,
+              assetId ? assetId.substring(0, 16) + '...' : '',
+              marketData.data ? '有数据' : ''
+            )
+          }
 
           // 通知普通监听器
           this.messageHandlers.forEach(handler => {
@@ -290,9 +332,8 @@ export class RealtimeService {
           }
         }
       }
-
     } catch (error) {
-      console.error('[RealtimeService] 消息处理失败:', error, '原始数据:', rawData.substring(0, 200))
+      console.debug('[RealtimeService] 消息处理失败')
     }
   }
 
@@ -306,7 +347,6 @@ export class RealtimeService {
 
     const type = msg.type || msg.event || msg.event_type || 'unknown'
     const assetId = msg.asset_id || msg.market || msg.token_id || msg.assetId || ''
-
     let data = msg.data || msg.payload || msg
 
     // 如果是订单簿消息，标准化格式
@@ -372,7 +412,6 @@ export class RealtimeService {
         const bestAsk = book.asks[0]?.[0] || 0
         book.spread = bestAsk - bestBid
         book.midPrice = (bestBid + bestAsk) / 2
-
         this.orderBooks.set(assetId, book)
       }
     }
@@ -381,11 +420,9 @@ export class RealtimeService {
     if (data.type === 'last_trade_price' && data.data?.price) {
       const history = this.priceHistory.get(assetId) || []
       history.push(data.data.price)
-
       if (history.length > 100) {
         history.shift()
       }
-
       this.priceHistory.set(assetId, history)
     }
   }

@@ -5,6 +5,7 @@ import { MatrixButton } from '@/components/ui/MatrixButton'
 import { MatrixInput } from '@/components/ui/MatrixInput'
 import { MatrixModal } from '@/components/ui/MatrixModal'
 import { cn } from '@/utils/cn'
+import { StrategyConfig } from './StrategyConfig'
 import apiConfigManager, { API_PROVIDERS, type ApiProvider, type ApiConfig } from '@/services/api/ApiConfigManager'
 
 export const SettingsPanel: React.FC = () => {
@@ -30,7 +31,7 @@ export const SettingsPanel: React.FC = () => {
 
   const handleSaveApiKey = async () => {
     if (!editingProvider || !apiKeyInput.trim()) {
-      addNotification('请输入 API Key', 'error')
+      addNotification('Please enter API Key', 'error')
       return
     }
 
@@ -43,7 +44,7 @@ export const SettingsPanel: React.FC = () => {
     if (!isValid) {
       setTestResult('error')
       setIsTesting(false)
-      addNotification('API Key 验证失败', 'error')
+      addNotification('API Key validation failed', 'error')
       return
     }
 
@@ -63,28 +64,28 @@ export const SettingsPanel: React.FC = () => {
     setShowApiKeyModal(false)
     setApiKeyInput('')
     setEditingProvider(null)
-    addNotification(`${editingProvider.name} API Key 已保存`, 'success')
+    addNotification(`${editingProvider.name} API Key saved`, 'success')
   }
 
   const handleDeleteApiKey = async (providerId: string) => {
-    if (confirm('确定要删除这个 API Key 吗？')) {
+    if (confirm('Are you sure you want to delete this API Key?')) {
       await apiConfigManager.deleteProviderConfig(providerId)
       await loadApiConfigs()
-      addNotification('API Key 已删除', 'info')
+      addNotification('API Key deleted', 'info')
     }
   }
 
   const handleClearAll = async () => {
-    if (confirm('确定要清除所有 API 配置吗？此操作不可恢复！')) {
+    if (confirm('Are you sure you want to clear all API configurations? This cannot be undone!')) {
       await apiConfigManager.clearAllConfig()
       await loadApiConfigs()
-      addNotification('所有 API 配置已清除', 'info')
+      addNotification('All API configurations cleared', 'info')
     }
   }
 
   const handleSettingChange = (key: keyof typeof settings, value: any) => {
     updateSettings({ [key]: value })
-    addNotification('设置已保存', 'success')
+    addNotification('Settings saved', 'success')
   }
 
   const getProviderStatus = (providerId: string) => {
@@ -97,11 +98,14 @@ export const SettingsPanel: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* 交易设置 */}
-      <MatrixCard title="⚙️ 交易设置" subtitle="配置交易策略参数">
+      <MatrixCard
+        title="⚙️ Trading Settings"
+        subtitle="Configure trading strategy parameters"
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           <div>
             <label className="text-xs text-matrix-text-secondary font-mono mb-2 block">
-              纸面交易模式
+              Paper Trading Mode
             </label>
             <button
               onClick={() => handleSettingChange('paperTradingMode', !settings.paperTradingMode)}
@@ -118,7 +122,7 @@ export const SettingsPanel: React.FC = () => {
 
           <div>
             <label className="text-xs text-matrix-text-secondary font-mono mb-2 block">
-              最大投注比例 (%)
+              Max Bet (%)
             </label>
             <input
               type="number"
@@ -130,7 +134,7 @@ export const SettingsPanel: React.FC = () => {
 
           <div>
             <label className="text-xs text-matrix-text-secondary font-mono mb-2 block">
-              止损比例 (%)
+              Stop Loss (%)
             </label>
             <input
               type="number"
@@ -142,7 +146,7 @@ export const SettingsPanel: React.FC = () => {
 
           <div>
             <label className="text-xs text-matrix-text-secondary font-mono mb-2 block">
-              止盈比例 (%)
+              Take Profit (%)
             </label>
             <input
               type="number"
@@ -154,7 +158,7 @@ export const SettingsPanel: React.FC = () => {
 
           <div>
             <label className="text-xs text-matrix-text-secondary font-mono mb-2 block">
-              每日最大亏损 ($)
+              Daily Max Loss ($)
             </label>
             <input
               type="number"
@@ -166,7 +170,7 @@ export const SettingsPanel: React.FC = () => {
 
           <div>
             <label className="text-xs text-matrix-text-secondary font-mono mb-2 block">
-              自动卖出
+              Auto Sell
             </label>
             <button
               onClick={() => handleSettingChange('autoSellEnabled', !settings.autoSellEnabled)}
@@ -183,19 +187,22 @@ export const SettingsPanel: React.FC = () => {
         </div>
       </MatrixCard>
 
+      {/* ✅ 策略配置 - 独立卡片（修复位置） */}
+      <StrategyConfig />
+
       {/* API 配置 */}
       <MatrixCard
-        title="🤖 AI API 配置"
-        subtitle="配置 AI 分析服务的 API Key"
+        title="🤖 AI API Configuration"
+        subtitle="Configure AI analysis service API Keys"
         actions={
           <MatrixButton variant="danger" size="sm" onClick={handleClearAll}>
-            🗑️ 清除所有
+            🗑️ Clear All
           </MatrixButton>
         }
       >
         <div className="space-y-4">
           <div className="text-xs text-matrix-text-muted font-mono mb-4">
-            💡 支持 10 个主流 AI API 厂家，API Key 将加密存储在本地
+            💡 Supports 10 mainstream AI API providers. API Keys are encrypted and stored locally.
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -214,16 +221,16 @@ export const SettingsPanel: React.FC = () => {
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="text-sm font-mono text-matrix-text-primary">{provider.name}</h4>
                     {status.configured && (
-                      <span className="text-xs text-matrix-success font-mono">● 已配置</span>
+                      <span className="text-xs text-matrix-success font-mono">● Configured</span>
                     )}
                   </div>
 
                   <div className="text-xs text-matrix-text-secondary font-mono mb-3">
-                    模型：{status.model || provider.defaultModel}
+                    Model: {status.model || provider.defaultModel}
                   </div>
 
                   <div className="text-xs text-matrix-text-muted font-mono mb-3">
-                    价格：${provider.pricePer1kTokens.input}/1K (输入) | ${provider.pricePer1kTokens.output}/1K (输出)
+                    Price: ${provider.pricePer1kTokens.input}/1K (input) | ${provider.pricePer1kTokens.output}/1K (output)
                   </div>
 
                   <div className="flex gap-2">
@@ -237,7 +244,7 @@ export const SettingsPanel: React.FC = () => {
                       }}
                       className="flex-1"
                     >
-                      {status.configured ? '✏️ 编辑' : '➕ 配置'}
+                      {status.configured ? '✏️ Edit' : '➕ Configure'}
                     </MatrixButton>
                     {status.configured && (
                       <MatrixButton
@@ -257,22 +264,25 @@ export const SettingsPanel: React.FC = () => {
       </MatrixCard>
 
       {/* 关于 */}
-      <MatrixCard title="ℹ️ 关于" subtitle="系统信息">
+      <MatrixCard
+        title="ℹ️ About"
+        subtitle="System Information"
+      >
         <div className="space-y-2 text-xs text-matrix-text-secondary font-mono">
           <div className="flex justify-between">
-            <span>版本:</span>
+            <span>Version:</span>
             <span className="text-matrix-text-primary">v1.0.0</span>
           </div>
           <div className="flex justify-between">
-            <span>构建时间:</span>
+            <span>Build Date:</span>
             <span className="text-matrix-text-primary">2026-03-09</span>
           </div>
           <div className="flex justify-between">
-            <span>网络:</span>
+            <span>Network:</span>
             <span className="text-matrix-text-primary">Polygon Mainnet</span>
           </div>
           <div className="flex justify-between">
-            <span>链 ID:</span>
+            <span>Chain ID:</span>
             <span className="text-matrix-text-primary">137</span>
           </div>
         </div>
@@ -287,7 +297,7 @@ export const SettingsPanel: React.FC = () => {
           setApiKeyInput('')
           setTestResult(null)
         }}
-        title={editingProvider ? `配置 ${editingProvider.name}` : '配置 API'}
+        title={editingProvider ? `Configure ${editingProvider.name}` : 'Configure API'}
         size="md"
         actions={
           <>
@@ -300,14 +310,14 @@ export const SettingsPanel: React.FC = () => {
                 setTestResult(null)
               }}
             >
-              取消
+              Cancel
             </MatrixButton>
             <MatrixButton
               variant="primary"
               onClick={handleSaveApiKey}
               loading={isTesting}
             >
-              {isTesting ? '验证中...' : '保存'}
+              {isTesting ? 'Validating...' : 'Save'}
             </MatrixButton>
           </>
         }
@@ -316,7 +326,7 @@ export const SettingsPanel: React.FC = () => {
           {editingProvider && (
             <>
               <div className="text-sm text-matrix-text-secondary font-mono">
-                请输入 {editingProvider.name} 的 API Key：
+                Please enter {editingProvider.name} API Key:
               </div>
 
               <MatrixInput
@@ -327,10 +337,10 @@ export const SettingsPanel: React.FC = () => {
                 label="API Key"
               />
 
-              {/* 模型选择 */}
+              {/* ✅ 模型选择（移到正确位置） */}
               <div>
                 <label className="text-xs text-matrix-text-secondary font-mono mb-2 block">
-                  选择模型
+                  Select Model
                 </label>
                 <select
                   value={apiConfigs[editingProvider.id]?.model || editingProvider.defaultModel}
@@ -353,19 +363,19 @@ export const SettingsPanel: React.FC = () => {
               {/* 测试结果 */}
               {testResult === 'success' && (
                 <div className="p-3 border border-matrix-success/30 rounded bg-matrix-success/10 text-matrix-success font-mono text-sm">
-                  ✅ API Key 验证成功！
+                  ✅ API Key validated successfully!
                 </div>
               )}
               {testResult === 'error' && (
                 <div className="p-3 border border-matrix-error/30 rounded bg-matrix-error/10 text-matrix-error font-mono text-sm">
-                  ❌ API Key 验证失败，请检查后重试
+                  ❌ API Key validation failed. Please check and try again.
                 </div>
               )}
 
               {/* 获取 API Key 链接 */}
               <div className="p-3 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary">
                 <div className="text-xs text-matrix-text-muted font-mono mb-2">
-                  📖 如何获取 API Key：
+                  📖 How to get API Key:
                 </div>
                 <a
                   href={getApiKeyUrl(editingProvider.id)}
@@ -373,7 +383,7 @@ export const SettingsPanel: React.FC = () => {
                   rel="noopener noreferrer"
                   className="text-xs text-matrix-info font-mono hover:underline"
                 >
-                  点击前往 {editingProvider.name} 官网获取 API Key →
+                  Click to visit {editingProvider.name} official website →
                 </a>
               </div>
             </>
