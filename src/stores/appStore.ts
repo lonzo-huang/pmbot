@@ -1,10 +1,207 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { AppState, Market, Position, ActivityLog, Trade, PredictionResult } from '@/types'
 
 // ==========================================
-// 初始状态 - 确保所有值都有默认值
+// 类型定义
 // ==========================================
+
+export interface WalletState {
+  address: string | null
+  balance: number
+  isConnected: boolean
+  chainId: number
+  approvals: {
+    usdc: boolean
+    ctf: boolean
+  }
+}
+
+export interface Market {
+  id: string
+  question: string
+  volume: number
+  liquidity: number
+  outcomePrices: number[]
+  endDate: string
+  active: boolean
+  category?: string
+  assetIds?: string[]
+}
+
+export interface Position {
+  tokenId: string
+  marketId: string
+  outcome: string
+  amount: number
+  entryPrice: number
+  currentPrice: number
+  pnl: number
+  openedAt: number
+}
+
+export interface Trade {
+  id: string
+  marketId: string
+  type: 'buy' | 'sell'
+  outcome: string
+  amount: number
+  price: number
+  timestamp: number
+  pnl?: number
+}
+
+export interface PredictionResult {
+  marketId: string
+  prediction: 'yes' | 'no'
+  confidence: number
+  reasoning: string
+  timestamp: number
+}
+
+export interface ActivityLog {
+  id: string
+  type: string
+  message: string
+  timestamp: number
+}
+
+export interface Notification {
+  id: string
+  message: string
+  type: 'success' | 'error' | 'info'
+}
+
+export interface ErrorItem {
+  message: string
+  type: string
+}
+
+// ==========================================
+// 主应用状态接口
+// ==========================================
+
+export interface AppState {
+  // 钱包状态
+  wallet: WalletState
+
+  // 市场状态
+  markets: {
+    activeMarkets: Market[]
+    scannedMarkets: Market[]
+    lastScanTime: Date | null
+  }
+
+  // 持仓状态
+  positions: {
+    active: Position[]
+    history: Position[]
+    pnl: {
+      total: number
+      today: number
+      unrealized: number
+      realized: number
+    }
+  }
+
+  // 交易状态
+  trading: {
+    isActive: boolean
+    activeOrders: any[]
+    tradeHistory: Trade[]
+  }
+
+  // LLM 状态
+  llm: {
+    isAnalyzing: boolean
+    analysisHistory: PredictionResult[]
+    totalCost: number
+  }
+
+  // API 配置状态
+  api: {
+    selectedProvider: string
+    configs: Record<string, { apiKey: string; model: string }>
+  }
+
+  // 设置状态
+  settings: {
+    paperTradingMode: boolean
+    maxBetPercent: number
+    maxDailyLoss: number
+    autoSellEnabled: boolean
+    stopLossPercent: number
+    takeProfitPercent: number
+  }
+
+  // UI 状态
+  ui: {
+    currentView: string
+    isScanning: boolean
+    connectionStatus: 'online' | 'offline' | 'connecting'
+    errors: ErrorItem[]
+    notifications: Notification[]
+  }
+}
+
+// ==========================================
+// Store 接口定义（包含所有 actions）
+// ==========================================
+
+interface AppStore extends AppState {
+  // Wallet Actions
+  connectWallet: (address: string, balance: number) => void
+  disconnectWallet: () => void
+  updateBalance: (balance: number) => void
+  updateApprovals: (approvals: { usdc: boolean; ctf: boolean }) => void
+
+  // Market Actions
+  setMarkets: (markets: Market[]) => void
+  setScanning: (isScanning: boolean) => void
+  updateLastScanTime: (time: Date) => void
+
+  // Position Actions
+  addPosition: (position: Position) => void
+  removePosition: (tokenId: string) => void
+  updatePosition: (tokenId: string, updates: Partial<Position>) => void
+  updatePositions: (positions: Position[]) => void
+  clearPositions: () => void
+
+  // Trading Actions
+  setTradingActive: (active: boolean) => void
+  addTrade: (trade: Trade) => void
+  addOrder: (order: any) => void
+  removeOrder: (orderId: string) => void
+
+  // LLM Actions
+  setAnalyzing: (analyzing: boolean) => void
+  addAnalysis: (result: PredictionResult) => void
+  updateLlmCost: (cost: number) => void
+
+  // API Actions
+  updateApiConfig: (providerId: string, config: { apiKey: string; model: string }) => void
+  clearApiConfig: (providerId: string) => void
+  setSelectedProvider: (providerId: string) => void
+
+  // UI Actions
+  setView: (view: string) => void
+  setConnectionStatus: (status: 'online' | 'offline' | 'connecting') => void
+  addError: (message: string, type?: string) => void
+  addNotification: (message: string, type?: 'success' | 'error' | 'info') => void
+  clearNotification: (id: string) => void
+  clearErrors: () => void
+
+  // Settings Actions
+  updateSettings: (settings: Partial<AppState['settings']>) => void
+  resetSettings: () => void
+
+  // PnL Actions
+  updatePnl: (pnl: { total?: number; today?: number; unrealized?: number }) => void
+}
+
+// ==========================================
+// 初始状态
+// ==========================================
+
 const initialState: AppState = {
   wallet: {
     address: null,
@@ -38,6 +235,10 @@ const initialState: AppState = {
     analysisHistory: [],
     totalCost: 0
   },
+  api: {
+    selectedProvider: 'openrouter',
+    configs: {}
+  },
   settings: {
     paperTradingMode: true,
     maxBetPercent: 5,
@@ -49,64 +250,16 @@ const initialState: AppState = {
   ui: {
     currentView: 'dashboard',
     isScanning: false,
-    connectionStatus: 'offline' as 'online' | 'offline' | 'connecting',
+    connectionStatus: 'offline',
     errors: [],
     notifications: []
   }
 }
 
 // ==========================================
-// Store 接口定义
-// ==========================================
-interface AppStore extends AppState {
-  // Wallet Actions
-  connectWallet: (address: string, balance: number) => void
-  disconnectWallet: () => void
-  updateBalance: (balance: number) => void
-  updateApprovals: (approvals: { usdc: boolean; ctf: boolean }) => void
-
-  // Market Actions
-  setMarkets: (markets: Market[]) => void
-  setScanning: (isScanning: boolean) => void
-  updateLastScanTime: (time: Date) => void
-
-  // Position Actions
-  addPosition: (position: Position) => void
-  removePosition: (tokenId: string) => void
-  updatePosition: (tokenId: string, updates: Partial<Position>) => void
-  updatePositions: (positions: Position[]) => void
-  clearPositions: () => void
-
-  // Trading Actions
-  setTradingActive: (active: boolean) => void
-  addTrade: (trade: Trade) => void
-  addOrder: (order: any) => void
-  removeOrder: (orderId: string) => void
-
-  // LLM Actions
-  setAnalyzing: (analyzing: boolean) => void
-  addAnalysis: (result: PredictionResult) => void
-  updateLlmCost: (cost: number) => void
-
-  // UI Actions
-  setView: (view: string) => void
-  setConnectionStatus: (status: 'online' | 'offline' | 'connecting') => void
-  addError: (message: string, type?: string) => void
-  addNotification: (message: string, type?: 'success' | 'error' | 'info') => void
-  clearNotification: (id: string) => void
-  clearErrors: () => void
-
-  // Settings Actions
-  updateSettings: (settings: Partial<AppState['settings']>) => void
-  resetSettings: () => void
-
-  // PnL Actions
-  updatePnl: (pnl: { total?: number; today?: number; unrealized?: number }) => void
-}
-
-// ==========================================
 // Create Store
 // ==========================================
+
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
@@ -132,7 +285,6 @@ export const useAppStore = create<AppStore>()(
         set({ wallet: { ...initialState.wallet } })
       },
 
-      // ✅ 新增：单独更新余额（用于定时同步）
       updateBalance: (balance) => {
         console.log('💰 [Store] updateBalance:', balance)
         set({
@@ -309,6 +461,42 @@ export const useAppStore = create<AppStore>()(
       },
 
       // ==========================================
+      // API Actions
+      // ==========================================
+      updateApiConfig: (providerId, config) => {
+        console.log('🔑 [Store] updateApiConfig:', providerId)
+        set({
+          api: {
+            ...get().api,
+            configs: {
+              ...get().api.configs,
+              [providerId]: config
+            }
+          }
+        })
+      },
+
+      clearApiConfig: (providerId) => {
+        const newConfigs = { ...get().api.configs }
+        delete newConfigs[providerId]
+        set({
+          api: {
+            ...get().api,
+            configs: newConfigs
+          }
+        })
+      },
+
+      setSelectedProvider: (providerId) => {
+        set({
+          api: {
+            ...get().api,
+            selectedProvider: providerId
+          }
+        })
+      },
+
+      // ==========================================
       // UI Actions
       // ==========================================
       setView: (view) => {
@@ -424,12 +612,14 @@ export const useAppStore = create<AppStore>()(
         wallet: {
           address: state.wallet.address,
           chainId: state.wallet.chainId
+        },
+        api: {
+          selectedProvider: state.api.selectedProvider,
+          configs: state.api.configs
         }
       }),
-      // 迁移策略（未来版本升级时使用）
       version: 1,
       migrate: (persistedState, version) => {
-        // 未来可以添加版本迁移逻辑
         return persistedState as AppState
       }
     }
