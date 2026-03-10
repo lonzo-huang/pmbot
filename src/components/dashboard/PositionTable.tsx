@@ -17,7 +17,7 @@ export const PositionTable: React.FC<PositionTableProps> = ({
     return (
       <MatrixCard title="ACTIVE POSITIONS">
         <div className="text-center py-8 text-matrix-text-secondary">
-          暂无活跃持仓
+          No active positions
         </div>
       </MatrixCard>
     )
@@ -53,52 +53,65 @@ export const PositionTable: React.FC<PositionTableProps> = ({
             </tr>
           </thead>
           <tbody>
-            {positions.map((position) => (
-              <tr
-                key={position.tokenId}
-                className="border-b border-matrix-border-tertiary hover:bg-matrix-bg-accent transition-colors"
-              >
-                <td className="p-3">
-                  <div className="text-matrix-text-primary font-semibold text-sm max-w-xs truncate">
-                    {position.marketQuestion}
-                  </div>
-                  <div className="text-matrix-text-muted text-xs font-mono">
-                    {position.tokenId.substring(0, 8)}...
-                  </div>
-                </td>
-                <td className="p-3">
-                  <span className="px-2 py-1 bg-matrix-bg-accent border border-matrix-border-primary rounded text-xs font-mono">
-                    {position.outcome}
-                  </span>
-                </td>
-                <td className="p-3 text-right font-mono text-matrix-text-primary">
-                  {position.size.toFixed(2)}
-                </td>
-                <td className="p-3 text-right font-mono text-matrix-text-primary">
-                  ${(position.entryPrice * 100).toFixed(1)}¢
-                </td>
-                <td className="p-3 text-right font-mono text-matrix-text-primary">
-                  ${(position.currentPrice * 100).toFixed(1)}¢
-                </td>
-                <td
-                  className={`p-3 text-right font-mono ${
-                    position.pnl.percent >= 0
-                      ? 'text-matrix-success'
-                      : 'text-matrix-error'
-                  }`}
+            {positions.map((position) => {
+              // ✅ 添加空值保护：确保 pnl 存在
+              const pnlPercent = position.pnl?.percent ?? 0
+              const pnlDollar = position.pnl?.dollar ?? 0
+              const entryPrice = position.entryPrice ?? 0
+              const currentPrice = position.currentPrice ?? 0
+              const size = position.size ?? 0
+
+              return (
+                <tr
+                  key={position.tokenId}
+                  className="border-b border-matrix-border-tertiary hover:bg-matrix-bg-accent transition-colors"
                 >
-                  {formatPercent(position.pnl.percent)}
-                  <div className="text-xs text-matrix-text-secondary">
-                    {formatCurrency(position.pnl.dollar)}
-                  </div>
-                </td>
-                <td className="p-3 text-center">
-                  <MatrixButton size="sm" variant="danger" onClick={() => onSell(position.tokenId)}>
-                    SELL
-                  </MatrixButton>
-                </td>
-              </tr>
-            ))}
+                  <td className="p-3">
+                    <div className="text-matrix-text-primary font-semibold text-sm max-w-xs truncate">
+                      {position.marketQuestion || 'Unknown Market'}
+                    </div>
+                    <div className="text-matrix-text-muted text-xs font-mono">
+                      {position.tokenId?.substring(0, 8) || 'N/A'}...
+                    </div>
+                  </td>
+                  <td className="p-3">
+                    <span className="px-2 py-1 bg-matrix-bg-accent border border-matrix-border-primary rounded text-xs font-mono">
+                      {position.outcome || 'N/A'}
+                    </span>
+                  </td>
+                  <td className="p-3 text-right font-mono text-matrix-text-primary">
+                    {size.toFixed(2)}
+                  </td>
+                  <td className="p-3 text-right font-mono text-matrix-text-primary">
+                    ${(entryPrice * 100).toFixed(1)}¢
+                  </td>
+                  <td className="p-3 text-right font-mono text-matrix-text-primary">
+                    ${(currentPrice * 100).toFixed(1)}¢
+                  </td>
+                  <td
+                    className={`p-3 text-right font-mono ${
+                      pnlPercent >= 0
+                        ? 'text-matrix-success'
+                        : 'text-matrix-error'
+                    }`}
+                  >
+                    {formatPercent(pnlPercent)}
+                    <div className="text-xs text-matrix-text-secondary">
+                      {formatCurrency(pnlDollar)}
+                    </div>
+                  </td>
+                  <td className="p-3 text-center">
+                    <MatrixButton
+                      size="sm"
+                      variant="danger"
+                      onClick={() => onSell(position.tokenId)}
+                    >
+                      SELL
+                    </MatrixButton>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

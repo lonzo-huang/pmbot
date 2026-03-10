@@ -1,8 +1,9 @@
 import React from 'react'
 import { MatrixCard } from '@/components/ui/MatrixCard'
 import { MatrixButton } from '@/components/ui/MatrixButton'
-import { MatrixInput } from '@/components/ui/MatrixInput'
 import { cn } from '@/utils/cn'
+// ✅ 架构核心：从 Store 获取状态
+import { useAppStore } from '@/stores/appStore'
 import { strategyManager } from '@/services/strategies/StrategyService'
 
 interface StrategyInfo {
@@ -15,8 +16,12 @@ interface StrategyInfo {
 }
 
 export const StrategyConfig: React.FC = () => {
+  // ✅ 从 Store 获取策略状态（与 MarketsView 共享）
+  const { strategy, setStrategyRunning } = useAppStore()
   const [strategies, setStrategies] = React.useState<StrategyInfo[]>([])
-  const [isRunning, setIsRunning] = React.useState(false)
+
+  // ✅ 使用 Store 状态代替本地 state
+  const { isRunning } = strategy
 
   React.useEffect(() => {
     loadStrategies()
@@ -44,13 +49,9 @@ export const StrategyConfig: React.FC = () => {
     loadStrategies()
   }
 
+  // ✅ 架构核心：调用 Store action
   const toggleEngine = () => {
-    if (isRunning) {
-      strategyManager.stop()
-    } else {
-      strategyManager.start()
-    }
-    setIsRunning(!isRunning)
+    setStrategyRunning(!isRunning)
   }
 
   return (

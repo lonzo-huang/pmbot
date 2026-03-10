@@ -1,10 +1,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+// ✅ 新增：导入 strategyManager
+import { strategyManager } from '@/services/strategies'
 
 // ==========================================
 // 类型定义
 // ==========================================
-
 export interface WalletState {
   address: string | null
   balance: number
@@ -79,7 +80,6 @@ export interface ErrorItem {
 // ==========================================
 // 主应用状态接口
 // ==========================================
-
 export interface AppState {
   // 钱包状态
   wallet: WalletState
@@ -141,12 +141,17 @@ export interface AppState {
     errors: ErrorItem[]
     notifications: Notification[]
   }
+
+  // ✅ 新增：策略引擎状态（架构核心）
+  strategy: {
+    isRunning: boolean
+    lastActiveAt?: number
+  }
 }
 
 // ==========================================
 // Store 接口定义（包含所有 actions）
 // ==========================================
-
 interface AppStore extends AppState {
   // Wallet Actions
   connectWallet: (address: string, balance: number) => void
@@ -196,12 +201,14 @@ interface AppStore extends AppState {
 
   // PnL Actions
   updatePnl: (pnl: { total?: number; today?: number; unrealized?: number }) => void
+
+  // ✅ 新增：策略引擎 Action（架构核心）
+  setStrategyRunning: (running: boolean) => void
 }
 
 // ==========================================
 // 初始状态
 // ==========================================
-
 const initialState: AppState = {
   wallet: {
     address: null,
@@ -253,13 +260,17 @@ const initialState: AppState = {
     connectionStatus: 'offline',
     errors: [],
     notifications: []
+  },
+  // ✅ 新增：策略引擎初始状态
+  strategy: {
+    isRunning: false,
+    lastActiveAt: undefined
   }
 }
 
 // ==========================================
 // Create Store
 // ==========================================
-
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
@@ -602,6 +613,28 @@ export const useAppStore = create<AppStore>()(
             }
           }
         })
+      },
+
+      // ==========================================
+      // ✅ 新增：策略引擎 Action（架构核心）
+      // ==========================================
+      setStrategyRunning: (running) => {
+        console.log('🤖 [Store] setStrategyRunning:', running)
+
+        // ✅ 调用 strategyManager 实际启动/停止
+        if (running) {
+          strategyManager.start()
+        } else {
+          strategyManager.stop()
+        }
+
+        // ✅ 更新全局状态
+        set({
+          strategy: {
+            isRunning: running,
+            lastActiveAt: running ? Date.now() : get().strategy.lastActiveAt
+          }
+        })
       }
     }),
     {
@@ -616,6 +649,11 @@ export const useAppStore = create<AppStore>()(
         api: {
           selectedProvider: state.api.selectedProvider,
           configs: state.api.configs
+        },
+        // ✅ 新增：持久化策略状态（刷新页面后保持）
+        strategy: {
+          isRunning: state.strategy.isRunning,
+          lastActiveAt: state.strategy.lastActiveAt
         }
       }),
       version: 1,

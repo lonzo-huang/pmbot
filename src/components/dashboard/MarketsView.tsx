@@ -9,6 +9,7 @@ import { cn } from '@/utils/cn'
 import { formatCurrency } from '@/utils/formatting'
 import { realtimeService, MarketData, OrderBook } from '@/services/realtime/RealtimeService'
 import { strategyManager, TradeSignal } from '@/services/strategies'
+import { tradingService } from '@/services/trading/TradingService'
 
 interface Market {
   id: string
@@ -108,7 +109,6 @@ const fetchMarketDataFromSlug = async (
 } | null> => {
   try {
     addLog(`🔍 查询 Gamma API: slug=${slug}`)
-
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 15000)
 
@@ -196,13 +196,12 @@ const fetchMarketDataFromSlug = async (
       clearTimeout(timeoutId)
 
       if (fetchError.name === 'AbortError') {
-        addLog(`❌ 请求超时（15秒）`)
+        addLog(`❌ 请求超时（15 秒）`)
       } else {
         throw fetchError
       }
       return null
     }
-
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : '未知错误'
     addLog(`❌ 获取失败：${errorMsg}`)
@@ -215,24 +214,44 @@ const fetchMarketDataFromSlug = async (
 // ============================================
 
 export const MarketsView: React.FC = () => {
-  const { setScanning, addNotification, setMarkets } = useAppStore()
+  // ✅ 修改：从 Store 获取策略状态（而不是本地 state）
+  const {
+    setScanning,
+    addNotification,
+    setMarkets,
+    strategy,              // ✅ 新增：获取全局策略状态
+    setStrategyRunning     // ✅ 新增：获取设置策略状态的方法
+  } = useAppStore()
+
   const [markets, setMarketsData] = useState<Market[]>([])
   const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'connected' | 'error'>('idle')
   const [scanLog, setScanLog] = useState<string[]>([])
-  const [filter, setFilter] = useState<string>('all')
-  const [sortBy, setSortBy] = useState<string>('volume')
-  const [wsStatus, setWsStatus] = useState<string>('disconnected')
+  const [filter, setFilter] = useState('all')
+  const [sortBy, setSortBy] = useState('volume')
+  const [wsStatus, setWsStatus] = useState('disconnected')
   const [messageCount, setMessageCount] = useState(0)
-
   const [showMarketSelector, setShowMarketSelector] = useState(false)
   const [selectedTemplates, setSelectedTemplates] = useState<string[]>(['btc-100k-2026', 'eth-5k-q2', 'fed-rates-march'])
-  const [customAssetIds, setCustomAssetIds] = useState<string>('')
-  const [eventUrl, setEventUrl] = useState<string>('')
+  const [customAssetIds, setCustomAssetIds] = useState('')
+  const [eventUrl, setEventUrl] = useState('')
   const [isFetchingAssets, setIsFetchingAssets] = useState(false)
   const [showManualGuide, setShowManualGuide] = useState(false)
 
-  const [strategyEnabled, setStrategyEnabled] = useState(false)
+  // ❌ 删除这行：const [strategyEnabled, setStrategyEnabled] = useState(false)
+  // ✅ 改用 Store 状态代替本地 state
+  const strategyEnabled = strategy.isRunning
+
   const [tradeSignals, setTradeSignals] = useState<TradeSignal[]>([])
+
+  // ✅ 保留：测试持仓自定义参数
+  const [showTestPositionModal, setShowTestPositionModal] = useState(false)
+  const [testPositionParams, setTestPositionParams] = useState({
+    marketId: 'btc-100k-2026',
+    outcome: 'yes' as 'yes' | 'no',
+    amount: 50,
+    entryPrice: 0.42,
+    currentPrice: 0.45,
+  })
 
   // 日志自动滚动
   const logRef = useRef<HTMLDivElement>(null)
@@ -247,30 +266,52 @@ export const MarketsView: React.FC = () => {
     }, 50)
   }
 
+  // ✅ 保留：添加测试持仓函数
+  const addTestPosition = () => {
+    const store = useAppStore.getState()
+    const pnl = (testPositionParams.currentPrice - testPositionParams.entryPrice) * testPositionParams.amount *
+                (testPositionParams.outcome === 'yes' ? 1 : -1)
+
+    const position = {
+      tokenId: `test-${Date.now()}`,
+      marketId: testPositionParams.marketId,
+      outcome: testPositionParams.outcome,
+      amount: testPositionParams.amount,
+      entryPrice: testPositionParams.entryPrice,
+      currentPrice: testPositionParams.currentPrice,
+      pnl,
+      openedAt: Date.now(),
+    }
+
+    store.addPosition(position)
+    addLog(`✅ Test position added: ${testPositionParams.outcome.toUpperCase()} @ ${(testPositionParams.entryPrice * 100).toFixed(1)}¢`)
+    addNotification('Test position added successfully', 'success')
+    setShowTestPositionModal(false)
+  }
+
   const handleImportEventUrl = async () => {
     const trimmedUrl = eventUrl.trim()
-
     if (!trimmedUrl) {
-      addNotification('请输入事件 URL', 'error')
+      addNotification('Please enter event URL', 'error')
       return
     }
 
     setIsFetchingAssets(true)
-    addLog('🌐 正在解析事件 URL...')
-    addLog(`   输入: ${trimmedUrl}`)
+    addLog('🌐 Parsing event URL...')
+    addLog(`   Input: ${trimmedUrl}`)
 
     const slug = extractSlugFromUrl(trimmedUrl)
 
     if (!slug) {
-      addLog('❌ 无法从 URL 中提取 slug')
-      addLog('   请检查 URL 格式，例如:')
+      addLog('❌ Failed to extract slug from URL')
+      addLog('   Please check URL format, e.g.:')
       addLog('   https://polymarket.com/event/btc-updown-15m-1773011700')
-      addNotification('无效的 URL 格式，请检查并重试', 'error')
+      addNotification('Invalid URL format, please check and retry', 'error')
       setIsFetchingAssets(false)
       return
     }
 
-    addLog(`📋 提取的 slug: ${slug}`)
+    addLog(`📋 Extracted slug: ${slug}`)
 
     const marketData = await fetchMarketDataFromSlug(slug, addLog)
 
@@ -285,14 +326,14 @@ export const MarketsView: React.FC = () => {
 
       setCustomAssetIds(allIds.join(','))
       addNotification(
-        `成功导入 ${newIds.length} 个新资产 ID（共 ${allIds.length} 个）`,
+        `Successfully imported ${newIds.length} new asset IDs (total: ${allIds.length})`,
         'success'
       )
-      addLog(`✅ 导入完成！市场: ${marketData.question}`)
+      addLog(`✅ Import complete! Market: ${marketData.question}`)
       setEventUrl('')
     } else {
-      addNotification('获取失败，请查看日志或手动输入资产 ID', 'error')
-      addLog('💡 提示: 可以尝试使用浏览器开发者工具手动获取资产 ID')
+      addNotification('Failed to fetch, check logs or enter asset IDs manually', 'error')
+      addLog('💡 Tip: Try using browser DevTools to manually get asset IDs')
     }
 
     setIsFetchingAssets(false)
@@ -304,22 +345,22 @@ export const MarketsView: React.FC = () => {
     let strategyUnsubscribe: (() => void) | undefined
 
     const connectWebSocket = async () => {
-      addLog('🔌 正在连接 Polymarket WebSocket...')
+      addLog('🔌 Connecting to Polymarket WebSocket...')
 
       const connected = await realtimeService.connect()
 
       if (connected) {
         setWsStatus(realtimeService.getStatus())
-        addLog('✅ WebSocket 连接成功')
+        addLog('✅ WebSocket connected successfully')
         setScanStatus('connected')
-        addNotification('实时行情已连接', 'success')
+        addNotification('Real-time data connected', 'success')
         // 连接成功后加载市场
         loadSelectedMarkets()
       } else {
         setWsStatus('error')
         setScanStatus('error')
-        addLog('❌ WebSocket 连接失败')
-        addNotification('实时行情连接失败', 'error')
+        addLog('❌ WebSocket connection failed')
+        addNotification('Real-time data connection failed', 'error')
       }
     }
 
@@ -333,10 +374,35 @@ export const MarketsView: React.FC = () => {
       }
     })
 
-    strategyUnsubscribe = strategyManager.onSignal((signal: TradeSignal) => {
+    strategyUnsubscribe = strategyManager.onSignal(async (signal: TradeSignal) => {
       setTradeSignals(prev => [signal, ...prev.slice(0, 19)])
       addLog(`📊 [${signal.strategy}] ${signal.action.toUpperCase()} ${signal.side.toUpperCase()} @ ${(signal.price * 100).toFixed(1)}¢`)
-      addNotification(`策略信号: ${signal.reason}`, 'info')
+      addNotification(`Strategy signal: ${signal.reason}`, 'info')
+
+      // ✅ 保留：执行交易
+      if (signal.confidence >= 0.7) {
+        addLog(`📝 Executing trade: ${signal.strategy}`)
+
+        const result = await tradingService.createOrder({
+          tokenId: signal.asset_id,
+          side: signal.action === 'buy' ? 'BUY' : 'SELL',
+          amount: signal.size,
+          orderType: 'GTC',
+          price: signal.price,
+          reason: signal.reason,
+          signal: signal,
+        })
+
+        if (result.success) {
+          addLog(`✅ Trade successful: ${result.orderId}`)
+          addNotification('Trade executed successfully', 'success')
+          // 更新持仓显示
+          const positions = tradingService.getPositions()
+          // 这里可以添加更新 Store 的逻辑
+        } else {
+          addLog(`❌ Trade failed: ${result.error}`)
+        }
+      }
     })
 
     connectWebSocket()
@@ -345,14 +411,14 @@ export const MarketsView: React.FC = () => {
       if (unsubscribe) unsubscribe()
       if (strategyUnsubscribe) strategyUnsubscribe()
       realtimeService.disconnect()
-      strategyManager.stop()
+      // ❌ 删除这行：strategyManager.stop()
+      // 策略由 Store 统一管理，不在组件卸载时停止
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const updateMarketFromOrderBook = (data: MarketData) => {
     if (!data.data) return
-
     setMarketsData(prev => prev.map(market => {
       if (market.assetIds?.includes(data.asset_id || '')) {
         const book = data.data as OrderBook
@@ -373,7 +439,6 @@ export const MarketsView: React.FC = () => {
 
   const updateMarketFromTrade = (data: MarketData) => {
     if (!data.data?.price) return
-
     setMarketsData(prev => prev.map(market => {
       if (market.assetIds?.includes(data.asset_id || '')) {
         return {
@@ -388,7 +453,7 @@ export const MarketsView: React.FC = () => {
     }))
   }
 
-  // ✅ 加载选择的市场（修复：添加连接状态检查）
+  // ✅ 加载选择的市场
   const loadSelectedMarkets = () => {
     const selectedMarkets = MARKET_TEMPLATES.filter(m => selectedTemplates.includes(m.id))
 
@@ -418,22 +483,21 @@ export const MarketsView: React.FC = () => {
 
     if (allAssetIds.length > 0 && status === 'connected') {
       realtimeService.subscribe(allAssetIds)
-      addLog(`📡 已订阅 ${allAssetIds.length} 个资产`)
+      addLog(`📡 Subscribed to ${allAssetIds.length} assets`)
     } else if (allAssetIds.length > 0) {
-      addLog(`⚠️ WebSocket 未连接 (${status})，资产将在连接后订阅`)
+      addLog(`⚠️ WebSocket not connected (${status}), assets will be subscribed after connection`)
     }
   }
 
   const handleScan = async () => {
     if (scanStatus === 'scanning') return
-
     setScanStatus('scanning')
     setScanning(true)
     setMarketsData([])
     setScanLog([])
     setMessageCount(0)
-    addLog('🔍 重新连接市场数据...')
-    addNotification('重新连接实时行情', 'info')
+    addLog('🔍 Reconnecting market data...')
+    addNotification('Reconnecting real-time data', 'info')
 
     realtimeService.disconnect()
     await new Promise(resolve => setTimeout(resolve, 1000))
@@ -444,28 +508,28 @@ export const MarketsView: React.FC = () => {
       setWsStatus(realtimeService.getStatus())
       loadSelectedMarkets()
       setScanStatus('connected')
-      addLog('✅ 重新连接成功')
-      addNotification('实时行情已刷新', 'success')
+      addLog('✅ Reconnection successful')
+      addNotification('Real-time data refreshed', 'success')
     } else {
       setScanStatus('error')
-      addLog('❌ 重新连接失败')
-      addNotification('重新连接失败', 'error')
+      addLog('❌ Reconnection failed')
+      addNotification('Reconnection failed', 'error')
     }
 
     setScanning(false)
   }
 
+  // ✅ 修改：使用 Store action 而不是直接操作 strategyManager
   const toggleStrategy = () => {
-    if (strategyEnabled) {
-      strategyManager.stop()
-      setStrategyEnabled(false)
-      addLog('⏹️ 策略引擎已停止')
-      addNotification('策略引擎已停止', 'info')
+    // ✅ 调用 Store action，而不是直接操作 strategyManager
+    setStrategyRunning(!strategyEnabled)
+
+    if (!strategyEnabled) {
+      addLog('🚀 Strategy engine started')
+      addNotification('Strategy engine started', 'success')
     } else {
-      strategyManager.start()
-      setStrategyEnabled(true)
-      addLog('🚀 策略引擎已启动')
-      addNotification('策略引擎已启动', 'success')
+      addLog('⏹️ Strategy engine stopped')
+      addNotification('Strategy engine stopped', 'info')
     }
   }
 
@@ -477,16 +541,15 @@ export const MarketsView: React.FC = () => {
     )
   }
 
-  // ✅ 保存市场选择（修复：保存后尝试订阅）
+  // ✅ 保存市场选择
   const saveMarketSelection = async () => {
     loadSelectedMarkets()
     setShowMarketSelector(false)
-    addNotification(`已选择 ${selectedTemplates.length} 个市场`, 'success')
-
+    addNotification(`Selected ${selectedTemplates.length} markets`, 'success')
     // 如果 WebSocket 未连接，自动重连
     const status = realtimeService.getStatus()
     if (status !== 'connected') {
-      addLog('🔄 WebSocket 未连接，正在重新连接...')
+      addLog('🔄 WebSocket not connected, reconnecting...')
       await handleScan()
     }
   }
@@ -504,12 +567,12 @@ export const MarketsView: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full overflow-hidden p-4 space-y-3">
-      {/* 顶部区域：Scanner Control - 更紧凑 */}
+      {/* 顶部区域：Scanner Control */}
       <div className="flex-shrink-0">
         <MatrixCard title="MARKET SCANNER" subtitle="Real-time Polymarket data via WebSocket">
           <div className="flex justify-between items-center mb-3">
             <div className="text-sm text-matrix-text-secondary font-mono">
-              状态：
+              Status:
               <span className={cn(
                 'ml-2',
                 scanStatus === 'idle' ? 'text-matrix-text-muted' :
@@ -517,21 +580,31 @@ export const MarketsView: React.FC = () => {
                 scanStatus === 'connected' ? 'text-matrix-success' :
                 'text-matrix-error'
               )}>
-                {scanStatus === 'idle' && '空闲'}
-                {scanStatus === 'scanning' && '连接中...'}
-                {scanStatus === 'connected' && '● 实时连接中'}
-                {scanStatus === 'error' && '错误'}
+                {scanStatus === 'idle' && 'Idle'}
+                {scanStatus === 'scanning' && 'Connecting...'}
+                {scanStatus === 'connected' && '● Connected'}
+                {scanStatus === 'error' && 'Error'}
               </span>
             </div>
             <div className="flex gap-2">
+              {/* ✅ 按钮状态直接使用 Store 状态 */}
               <MatrixButton
                 variant={strategyEnabled ? 'success' : 'secondary'}
                 onClick={toggleStrategy}
               >
-                {strategyEnabled ? '🤖 策略运行中' : '🤖 启动策略'}
+                {strategyEnabled ? '🤖 Strategy Running' : '🤖 Start Strategy'}
               </MatrixButton>
+
+              {/* ✅ 保留：测试持仓按钮 */}
+              <MatrixButton
+                variant="secondary"
+                onClick={() => setShowTestPositionModal(true)}
+              >
+                🧪 Add Test Position
+              </MatrixButton>
+
               <MatrixButton variant="secondary" onClick={() => setShowMarketSelector(true)}>
-                📋 选择市场
+                📋 Select Markets
               </MatrixButton>
               <MatrixButton
                 onClick={handleScan}
@@ -545,7 +618,7 @@ export const MarketsView: React.FC = () => {
 
           <div className="grid grid-cols-4 gap-3">
             <div className="p-2 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary/50">
-              <div className="text-xs text-matrix-text-secondary font-mono">WebSocket 状态</div>
+              <div className="text-xs text-matrix-text-secondary font-mono">WebSocket Status</div>
               <div className={cn(
                 'text-base font-bold font-mono',
                 wsStatus === 'connected' ? 'text-matrix-success' : 'text-matrix-error'
@@ -554,19 +627,19 @@ export const MarketsView: React.FC = () => {
               </div>
             </div>
             <div className="p-2 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary/50">
-              <div className="text-xs text-matrix-text-secondary font-mono">订阅资产</div>
+              <div className="text-xs text-matrix-text-secondary font-mono">Subscribed Assets</div>
               <div className="text-base font-bold font-mono text-matrix-text-primary">
                 {realtimeService.getSubscribedAssets().length}
               </div>
             </div>
             <div className="p-2 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary/50">
-              <div className="text-xs text-matrix-text-secondary font-mono">接收消息</div>
+              <div className="text-xs text-matrix-text-secondary font-mono">Messages Received</div>
               <div className="text-base font-bold font-mono text-matrix-info">
                 {messageCount}
               </div>
             </div>
             <div className="p-2 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary/50">
-              <div className="text-xs text-matrix-text-secondary font-mono">策略信号</div>
+              <div className="text-xs text-matrix-text-secondary font-mono">Strategy Signals</div>
               <div className={cn(
                 'text-base font-bold font-mono',
                 strategyEnabled ? 'text-matrix-success' : 'text-matrix-text-muted'
@@ -578,26 +651,30 @@ export const MarketsView: React.FC = () => {
         </MatrixCard>
       </div>
 
-      {/* 中间区域：市场列表 - 限制高度，确保日志可见 */}
+      {/* 中间区域：市场列表 */}
       <div className="flex-1 min-h-0 max-h-[50vh] overflow-hidden">
         {scanStatus === 'scanning' ? (
           <MatrixCard className="h-full">
-            <MatrixLoading text="正在连接实时行情..." fullScreen={false} />
+            <MatrixLoading text="Connecting to real-time data..." fullScreen={false} />
           </MatrixCard>
         ) : markets.length === 0 ? (
           <MatrixCard title="MARKETS" className="h-full">
             <div className="text-center py-8">
               <div className="text-4xl mb-4">📡</div>
-              <div className="text-matrix-text-secondary font-mono mb-4">暂无市场数据</div>
+              <div className="text-matrix-text-secondary font-mono mb-4">No market data available</div>
               <div className="flex gap-4 justify-center">
-                <MatrixButton onClick={handleScan} variant="primary">连接实时行情</MatrixButton>
-                <MatrixButton onClick={() => setShowMarketSelector(true)} variant="secondary">选择市场</MatrixButton>
+                <MatrixButton onClick={handleScan} variant="primary">
+                  Connect Real-time Data
+                </MatrixButton>
+                <MatrixButton onClick={() => setShowMarketSelector(true)} variant="secondary">
+                  Select Markets
+                </MatrixButton>
               </div>
             </div>
           </MatrixCard>
         ) : (
           <MatrixCard
-            title={`MARKETS (${filteredMarkets.length}) - 实时更新`}
+            title={`MARKETS (${filteredMarkets.length}) - Real-time Updates`}
             className="h-full flex flex-col"
             headerExtra={
               <div className="flex gap-3 items-center text-xs">
@@ -608,7 +685,7 @@ export const MarketsView: React.FC = () => {
                 >
                   {categories.map(cat => (
                     <option key={cat} value={cat}>
-                      {cat === 'all' ? '全部' : cat.toUpperCase()}
+                      {cat === 'all' ? 'All' : cat.toUpperCase()}
                     </option>
                   ))}
                 </select>
@@ -631,7 +708,7 @@ export const MarketsView: React.FC = () => {
                     key={market.id}
                     className="p-3 border border-matrix-border-tertiary rounded hover:border-matrix-border-primary transition-all cursor-pointer bg-matrix-bg-tertiary/50"
                     onClick={() => {
-                      addNotification(`选中市场：${market.question.substring(0, 50)}...`, 'info')
+                      addNotification(`Selected market: ${market.question.substring(0, 50)}...`, 'info')
                     }}
                   >
                     <div className="flex justify-between items-start mb-2">
@@ -680,7 +757,7 @@ export const MarketsView: React.FC = () => {
         )}
       </div>
 
-      {/* 底部区域：日志面板 - 始终显示，固定高度 */}
+      {/* 底部区域：日志面板 */}
       <div className="flex-shrink-0 h-44">
         <MatrixCard title="CONNECTION LOG" className="h-full flex flex-col">
           <div
@@ -689,7 +766,7 @@ export const MarketsView: React.FC = () => {
           >
             {scanLog.length === 0 ? (
               <div className="text-matrix-text-muted text-center py-4">
-                等待连接日志...
+                Waiting for connection logs...
               </div>
             ) : (
               scanLog.slice(-100).map((log, index) => (
@@ -716,7 +793,7 @@ export const MarketsView: React.FC = () => {
       {/* 策略信号浮动面板 */}
       {strategyEnabled && tradeSignals.length > 0 && (
         <div className="fixed bottom-4 right-4 w-96 z-50">
-          <MatrixCard title={`📊 策略信号 (${tradeSignals.length})`} className="shadow-lg">
+          <MatrixCard title={`📊 Strategy Signals (${tradeSignals.length})`} className="shadow-lg">
             <div className="max-h-48 overflow-y-auto">
               {tradeSignals.slice(0, 5).map((signal, index) => (
                 <div
@@ -747,19 +824,133 @@ export const MarketsView: React.FC = () => {
         </div>
       )}
 
+      {/* ✅ 保留：测试持仓自定义模态框 */}
+      <MatrixModal
+        isOpen={showTestPositionModal}
+        onClose={() => setShowTestPositionModal(false)}
+        title="Add Test Position"
+        size="md"
+        actions={
+          <>
+            <MatrixButton variant="secondary" onClick={() => setShowTestPositionModal(false)}>
+              Cancel
+            </MatrixButton>
+            <MatrixButton variant="primary" onClick={addTestPosition}>
+              Add Position
+            </MatrixButton>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="text-xs text-matrix-text-muted font-mono">
+            Customize test position parameters for testing:
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-matrix-text-secondary font-mono mb-1 block">
+                Market
+              </label>
+              <select
+                value={testPositionParams.marketId}
+                onChange={(e) => setTestPositionParams(prev => ({ ...prev, marketId: e.target.value }))}
+                className="w-full px-3 py-2 bg-matrix-bg-tertiary border border-matrix-border-tertiary rounded text-sm font-mono"
+              >
+                {MARKET_TEMPLATES.map(m => (
+                  <option key={m.id} value={m.id}>{m.question.substring(0, 30)}...</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-matrix-text-secondary font-mono mb-1 block">
+                Direction
+              </label>
+              <select
+                value={testPositionParams.outcome}
+                onChange={(e) => setTestPositionParams(prev => ({ ...prev, outcome: e.target.value as 'yes' | 'no' }))}
+                className="w-full px-3 py-2 bg-matrix-bg-tertiary border border-matrix-border-tertiary rounded text-sm font-mono"
+              >
+                <option value="yes">YES</option>
+                <option value="no">NO</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-matrix-text-secondary font-mono mb-1 block">
+                Amount (USDC)
+              </label>
+              <input
+                type="number"
+                value={testPositionParams.amount}
+                onChange={(e) => setTestPositionParams(prev => ({ ...prev, amount: Number(e.target.value) }))}
+                className="w-full px-3 py-2 bg-matrix-bg-tertiary border border-matrix-border-tertiary rounded text-sm font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-matrix-text-secondary font-mono mb-1 block">
+                Entry Price (¢)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                value={testPositionParams.entryPrice}
+                onChange={(e) => setTestPositionParams(prev => ({ ...prev, entryPrice: Number(e.target.value) }))}
+                className="w-full px-3 py-2 bg-matrix-bg-tertiary border border-matrix-border-tertiary rounded text-sm font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-matrix-text-secondary font-mono mb-1 block">
+                Current Price (¢)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                value={testPositionParams.currentPrice}
+                onChange={(e) => setTestPositionParams(prev => ({ ...prev, currentPrice: Number(e.target.value) }))}
+                className="w-full px-3 py-2 bg-matrix-bg-tertiary border border-matrix-border-tertiary rounded text-sm font-mono"
+              />
+            </div>
+          </div>
+
+          {/* 预览盈亏 */}
+          <div className="p-3 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary">
+            <div className="text-xs text-matrix-text-secondary font-mono mb-1">
+              Estimated PnL:
+            </div>
+            <div className={cn(
+              'text-lg font-bold font-mono',
+              (testPositionParams.currentPrice - testPositionParams.entryPrice) *
+              (testPositionParams.outcome === 'yes' ? 1 : -1) * testPositionParams.amount >= 0
+                ? 'text-matrix-success' : 'text-matrix-error'
+            )}>
+              ${((testPositionParams.currentPrice - testPositionParams.entryPrice) *
+                (testPositionParams.outcome === 'yes' ? 1 : -1) *
+                testPositionParams.amount).toFixed(2)}
+            </div>
+          </div>
+        </div>
+      </MatrixModal>
+
       {/* 市场选择模态框 */}
       <MatrixModal
         isOpen={showMarketSelector}
         onClose={() => setShowMarketSelector(false)}
-        title="选择市场"
+        title="Select Markets"
         size="lg"
         actions={
           <>
             <MatrixButton variant="secondary" onClick={() => setShowMarketSelector(false)}>
-              取消
+              Cancel
             </MatrixButton>
             <MatrixButton variant="primary" onClick={saveMarketSelection}>
-              保存选择 ({selectedTemplates.length}个)
+              Save Selection ({selectedTemplates.length})
             </MatrixButton>
           </>
         }
@@ -768,7 +959,7 @@ export const MarketsView: React.FC = () => {
           {/* 事件 URL 导入 */}
           <div className="p-3 border border-matrix-border-primary rounded bg-matrix-bg-accent">
             <div className="text-sm text-matrix-text-primary font-mono mb-2">
-              🌐 从 Polymarket 事件 URL 导入
+              🌐 Import from Polymarket Event URL
             </div>
             <div className="flex gap-2">
               <MatrixInput
@@ -783,18 +974,18 @@ export const MarketsView: React.FC = () => {
                 loading={isFetchingAssets}
                 variant="primary"
               >
-                获取
+                Fetch
               </MatrixButton>
             </div>
             <div className="text-xs text-matrix-text-muted font-mono mt-2">
-              💡 使用 Vite 代理获取 Gamma API 数据
+              💡 Use Vite proxy to fetch Gamma API data
             </div>
           </div>
 
           {/* 预设市场选择 */}
           <div>
             <div className="text-sm text-matrix-text-secondary font-mono mb-2">
-              或选择预设市场（可多选）：
+              Or select preset markets (multi-select):
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -833,13 +1024,13 @@ export const MarketsView: React.FC = () => {
           {/* 自定义资产 ID */}
           <div className="border-t border-matrix-border-tertiary pt-4">
             <div className="text-sm text-matrix-text-secondary font-mono mb-2">
-              或手动输入资产 ID（逗号分隔）：
+              Or manually enter asset IDs (comma separated):
             </div>
             <MatrixInput
               value={customAssetIds}
               onChange={setCustomAssetIds}
               placeholder="asset_id_1,asset_id_2,asset_id_3..."
-              label="自定义资产 ID"
+              label="Custom Asset IDs"
             />
 
             <div className="mt-3">
@@ -847,7 +1038,7 @@ export const MarketsView: React.FC = () => {
                 onClick={() => setShowManualGuide(true)}
                 className="text-xs text-matrix-info font-mono hover:underline flex items-center gap-1"
               >
-                📖 点击查看详细教程
+                📖 View Detailed Tutorial
               </button>
             </div>
           </div>
@@ -855,7 +1046,7 @@ export const MarketsView: React.FC = () => {
           {/* 当前选择 */}
           {customAssetIds && (
             <div className="p-3 border border-matrix-border-primary rounded bg-matrix-bg-tertiary">
-              <div className="text-xs text-matrix-text-secondary font-mono mb-1">当前资产 ID:</div>
+              <div className="text-xs text-matrix-text-secondary font-mono mb-1">Current Asset IDs:</div>
               <div className="text-xs text-matrix-success font-mono break-all">
                 {customAssetIds.length > 100 ? customAssetIds.substring(0, 100) + '...' : customAssetIds}
               </div>
@@ -868,30 +1059,30 @@ export const MarketsView: React.FC = () => {
       <MatrixModal
         isOpen={showManualGuide}
         onClose={() => setShowManualGuide(false)}
-        title="📖 手动查找资产 ID 教程"
+        title="📖 How to Find Asset IDs Manually"
         size="lg"
       >
         <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 text-sm">
           <div className="p-4 border border-matrix-border-primary rounded bg-matrix-bg-accent">
-            <h4 className="text-matrix-text-primary font-mono mb-2">方法：通过浏览器开发者工具</h4>
+            <h4 className="text-matrix-text-primary font-mono mb-2">Method: Using Browser DevTools</h4>
             <ol className="space-y-2 text-matrix-text-secondary font-mono text-xs">
-              <li>1. 打开 Polymarket 事件页面</li>
-              <li>2. 按 F12 打开开发者工具</li>
-              <li>3. 切换到 Network（网络）标签</li>
-              <li>4. 刷新页面（Ctrl+R）</li>
-              <li>5. 在过滤框输入 gamma 或 markets</li>
-              <li>6. 找到 gamma-api.polymarket.com/markets 请求</li>
-              <li>7. 切换到 Response（响应）标签</li>
-              <li>8. 复制 tokens 数组中的 id</li>
+              <li>1. Open Polymarket event page</li>
+              <li>2. Press F12 to open DevTools</li>
+              <li>3. Switch to Network tab</li>
+              <li>4. Refresh page (Ctrl+R)</li>
+              <li>5. Filter by "gamma" or "markets"</li>
+              <li>6. Find gamma-api.polymarket.com/markets request</li>
+              <li>7. Switch to Response tab</li>
+              <li>8. Copy id from tokens array</li>
             </ol>
           </div>
 
           <div className="p-4 border border-matrix-warning/30 rounded bg-matrix-warning/10">
-            <h4 className="text-matrix-warning font-mono mb-2">⚠️ 注意事项</h4>
+            <h4 className="text-matrix-warning font-mono mb-2">⚠️ Notes</h4>
             <ul className="space-y-1 text-matrix-text-muted font-mono text-xs">
-              <li>• 资产 ID 是非常长的数字字符串（约 80 位）</li>
-              <li>• 至少需要 1 个 ID</li>
-              <li>• 用逗号分隔，不要有空格</li>
+              <li>• Asset ID is a very long numeric string (~80 chars)</li>
+              <li>• At least 1 ID required</li>
+              <li>• Separate with commas, no spaces</li>
             </ul>
           </div>
         </div>

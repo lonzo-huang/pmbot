@@ -485,3 +485,4 @@ export class StrategyManager {
 
 // 导出单例
 export const strategyManager = new StrategyManager()
+export { BaseStrategy }
