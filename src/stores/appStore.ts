@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-// ✅ 新增：导入 strategyManager
+// ✅ 新增：导入 strategyManager（用于策略引擎控制）
 import { strategyManager } from '@/services/strategies'
 
 // ==========================================
@@ -142,7 +142,7 @@ export interface AppState {
     notifications: Notification[]
   }
 
-  // ✅ 新增：策略引擎状态（架构核心）
+  // ✅ 新增：策略引擎状态（用于自主决策架构）
   strategy: {
     isRunning: boolean
     lastActiveAt?: number
@@ -202,7 +202,7 @@ interface AppStore extends AppState {
   // PnL Actions
   updatePnl: (pnl: { total?: number; today?: number; unrealized?: number }) => void
 
-  // ✅ 新增：策略引擎 Action（架构核心）
+  // ✅ 新增：策略引擎 Action
   setStrategyRunning: (running: boolean) => void
 }
 
@@ -616,19 +616,19 @@ export const useAppStore = create<AppStore>()(
       },
 
       // ==========================================
-      // ✅ 新增：策略引擎 Action（架构核心）
+      // ✅ 新增：策略引擎 Action
       // ==========================================
       setStrategyRunning: (running) => {
         console.log('🤖 [Store] setStrategyRunning:', running)
 
-        // ✅ 调用 strategyManager 实际启动/停止
+        // 调用 strategyManager 实际启动/停止
         if (running) {
           strategyManager.start()
         } else {
           strategyManager.stop()
         }
 
-        // ✅ 更新全局状态
+        // 更新全局状态
         set({
           strategy: {
             isRunning: running,
