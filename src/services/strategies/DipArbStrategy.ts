@@ -4,12 +4,18 @@ import { TradingService } from '../trading/TradingService'
 import { RealtimeService, PriceUpdate } from '../realtime/RealtimeService'
 import { DipDetector, DipSignal } from './DipDetector'
 import { WalletService } from '../wallet/WalletService'
+import { LLMService } from '../llm/LLMService'
+
+// Trading fee constant (Polymarket 2% per side, 4% total for round-trip)
+const TRADING_FEE_PERCENT = 0.04
 
 // ===== PROVEN CONFIG (86% ROI in 4 Days) =====
 export const DIP_ARB_PROVEN_CONFIG = {
   // Position Sizing
   shares: 25,
-  sumTarget: 0.95,           // Leg1 + Leg2 <= $0.95 = 5% profit
+  sumTarget: 0.90,           // ✅ 优化：从 0.95 调整为 0.90
+                             // Leg1 + Leg2 <= $0.90 = 10% gross profit
+                             // 扣除 4% 手续费后 = 6% net profit
   
   // Signal Detection
   slidingWindowMs: 10000,    // 10 second sliding window
@@ -71,6 +77,7 @@ export class DipArbStrategy extends BaseStrategy {
   private realtimeService: RealtimeService
   private walletService: WalletService
   private dipDetector: DipDetector
+  private llmService: LLMService
   
   private currentRound: DipArbRound | null = null
   private subscribedMarkets: Set<string> = new Set()
@@ -94,6 +101,7 @@ export class DipArbStrategy extends BaseStrategy {
     this.tradingService = tradingService
     this.realtimeService = realtimeService
     this.walletService = walletService
+    this.llmService = new LLMService()
     this.dipDetector = new DipDetector(
       this.config.slidingWindowMs,
       this.config.dipThreshold,
@@ -216,10 +224,10 @@ export class DipArbStrategy extends BaseStrategy {
     const tokenId = update.tokenId
     const price = update.price
     
-    // Add to price history
-    const history = this.priceHistory.get(tokenId) || []
+    // 优化：限制历史记录长度，防止内存溢出
+    let history = this.priceHistory.get(tokenId) || []
     history.push(price)
-    if (history.length > 100) history.shift()
+    if (history.length > 50) history = history.slice(-50)
     this.priceHistory.set(tokenId, history)
     
     // Add to dip detector
@@ -244,9 +252,57 @@ export class DipArbStrategy extends BaseStrategy {
     if (this.currentRound?.leg1Executed && !this.currentRound.leg2Executed) {
       const elapsed = Date.now() - this.currentRound.leg1Timestamp
       if (elapsed > this.config.leg2TimeoutSeconds * 1000) {
-        this.log(`⚠️ Leg2 timeout (${this.config.leg2TimeoutSeconds}s), emergency exit`)
-        await this.handleLeg2Timeout()
+        this.log(`⚠️ Leg2 timeout (${this.config.leg2TimeoutSeconds}s), starting smart exit...`)
+        await this.handleSmartLeg2Timeout()
       }
+    }
+  }
+
+  /**
+   * 智能超时处理：不再是简单的卖出，而是先咨询 LLM 是否应该补单完成对冲
+   */
+  private async handleSmartLeg2Timeout(): Promise<void> {
+    if (!this.currentRound) return
+    
+    try {
+      const leg1Price = this.currentRound.leg1Price
+      const oppositeTokenId = this.getOppositeTokenId(this.currentRound.leg1TokenId!)
+      const currentOppositePrice = oppositeTokenId ? this.realtimeService.getPrice(oppositeTokenId)?.price : null
+      
+      if (currentOppositePrice) {
+        const currentSum = leg1Price + currentOppositePrice
+        
+        // 咨询 LLM
+        const analysis = await this.llmService.reason<{ action: 'BUY_LEG2' | 'SELL_LEG1' | 'WAIT', reasoning: string }>({
+          system: "你是一个交易风控专家。目前抄底策略的第二笔交易(Leg2)超时未成交，导致仓位处于未对冲风险中。",
+          prompt: `
+            策略: 抄底套利 (Dip Arb)
+            Leg1 买入价格: ${leg1Price}
+            Leg2 当前市场价格: ${currentOppositePrice}
+            当前总成本: ${currentSum} (目标是 <= ${this.config.sumTarget})
+            
+            如果当前总成本略高于目标但仍有利润空间 (总成本 < 1.0)，可以考虑强制买入 Leg2 完成对冲。
+            如果市场波动剧烈且亏损风险极大，请选择 SELL_LEG1 止损。
+          `,
+          outputSchema: {
+            action: { type: 'enum', values: ['BUY_LEG2', 'SELL_LEG1', 'WAIT'] },
+            reasoning: { type: 'string' }
+          }
+        })
+        
+        this.log(`🤖 LLM 超时建议: ${analysis.action} - ${analysis.reasoning}`)
+        
+        if (analysis.action === 'BUY_LEG2') {
+          await this.executeLeg2(oppositeTokenId!, currentOppositePrice)
+          return
+        }
+      }
+      
+      // 默认回退到紧急退出逻辑
+      await this.handleLeg2Timeout()
+    } catch (error) {
+      this.log(`❌ Smart timeout error: ${error}, falling back to emergency exit`)
+      await this.handleLeg2Timeout()
     }
   }
   
@@ -329,25 +385,28 @@ export class DipArbStrategy extends BaseStrategy {
           this.currentRound.leg2Price = price
           this.currentRound.status = 'complete'
           
-          const profit = 1.0 - (this.currentRound.leg1Price + this.currentRound.leg2Price)
-          this.currentRound.profit = profit
+          // ✅ 修复：计算净盈亏（扣除手续费）
+          const rawProfit = 1.0 - (this.currentRound.leg1Price + this.currentRound.leg2Price)
+          const netProfit = rawProfit - TRADING_FEE_PERCENT  // 扣除双边手续费
+          this.currentRound.profit = netProfit
           
           this.log(`✅ Leg2 executed: Order ${result.orderId}`)
-          this.log(`💰 ROUND COMPLETE: Profit = ${(profit * 100).toFixed(1)}% ($${(profit * this.config.shares).toFixed(2)})`)
+          this.log(`💰 ROUND COMPLETE: Raw Profit = ${(rawProfit * 100).toFixed(1)}%, Net Profit = ${(netProfit * 100).toFixed(1)}% ($${(netProfit * this.config.shares).toFixed(2)})`)
           
           // Auto-merge positions
           if (this.config.autoMerge) {
             await this.mergePositions(this.currentRound.marketId)
           }
           
-          // Update stats
+          // ✅ 修复：使用净盈亏判断胜负
           this.stats.totalTrades++
-          if (profit > 0) {
+          if (netProfit > 0) {
             this.stats.winRate = ((this.stats.winRate * (this.stats.totalTrades - 1) + 1) / this.stats.totalTrades) * 100
-            this.stats.totalPnl += profit * this.config.shares
           } else {
             this.stats.winRate = (this.stats.winRate * (this.stats.totalTrades - 1)) / this.stats.totalTrades
           }
+          // 无论盈亏都累加净盈亏
+          this.stats.totalPnl += netProfit * this.config.shares
           
           this.emit('round:complete', this.currentRound)
           

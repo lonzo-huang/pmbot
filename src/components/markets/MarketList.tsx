@@ -42,7 +42,7 @@ export const MarketList: React.FC<MarketListProps> = ({
 }) => {
   const { addPosition, addNotification } = useAppStore()
 
-  // 当前展开的买入面板：{ marketId, side }
+  // ✅ 关键：内联买入面板状态
   const [activePanel, setActivePanel] = useState<BuyPanel | null>(null)
   const [amount, setAmount] = useState('50')
 
@@ -55,9 +55,9 @@ export const MarketList: React.FC<MarketListProps> = ({
       return 0
     })
 
+  // ✅ 关键：打开/关闭买入面板
   const openPanel = (e: React.MouseEvent, marketId: string, side: 'YES' | 'NO') => {
     e.stopPropagation()
-    // 点同一个按钮再次点击则关闭
     if (activePanel?.marketId === marketId && activePanel?.side === side) {
       setActivePanel(null)
     } else {
@@ -66,6 +66,7 @@ export const MarketList: React.FC<MarketListProps> = ({
     }
   }
 
+  // ✅ 关键：执行买入
   const handleBuy = (e: React.MouseEvent, market: Market) => {
     e.stopPropagation()
     if (!activePanel) return
@@ -81,27 +82,19 @@ export const MarketList: React.FC<MarketListProps> = ({
     }
 
     const tokenId = market.assetIds?.[priceIndex] ?? market.assetIds?.[0] ?? market.id
-    const pnlDollar = 0
-    const pnlPercent = 0
 
     addPosition({
       tokenId,
       marketId: market.id,
-      marketQuestion: market.question,
-      outcome: side,
-      outcomeIndex: priceIndex,
-      size: amt,
+      outcome: side.toLowerCase(),
+      amount: amt,
       entryPrice,
       currentPrice: entryPrice,
-      pnl: { dollar: pnlDollar, percent: pnlPercent },
-      entryTime: new Date(),
-      lastUpdate: new Date(),
+      pnl: 0,
+      openedAt: Date.now(),
     })
 
-    addNotification(
-      `已添加 ${side} 仓位: ${market.question.substring(0, 35)}...`,
-      'success'
-    )
+    addNotification(`已添加 ${side} 仓位: ${market.question.substring(0, 35)}...`, 'success')
     setActivePanel(null)
   }
 
@@ -117,9 +110,7 @@ export const MarketList: React.FC<MarketListProps> = ({
             className="bg-matrix-bg-tertiary border border-matrix-border-tertiary rounded px-2 py-1 text-xs font-mono text-matrix-text-primary"
           >
             {categories.map(cat => (
-              <option key={cat} value={cat}>
-                {cat === 'all' ? 'All' : cat.toUpperCase()}
-              </option>
+              <option key={cat} value={cat}>{cat === 'all' ? 'All' : cat.toUpperCase()}</option>
             ))}
           </select>
           <select
@@ -134,8 +125,8 @@ export const MarketList: React.FC<MarketListProps> = ({
         </div>
       }
     >
-      <div className="flex-1 overflow-y-auto pr-2">
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+      <div className="flex-1 overflow-y-auto pr-2 min-h-0 custom-scrollbar">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-4">
           {filteredMarkets.map((market) => {
             const yesPrice = market.outcomePrices[0] ?? 0.5
             const noPrice = market.outcomePrices[1] ?? 0.5
@@ -154,8 +145,8 @@ export const MarketList: React.FC<MarketListProps> = ({
                 )}
                 onClick={() => !isPanelOpen && onMarketClick(market)}
               >
-                {/* 卡片头部 */}
                 <div className="p-3">
+                  {/* 头部：分类 + 日期 */}
                   <div className="flex justify-between items-start mb-2">
                     <span className="text-xs px-1.5 py-0.5 bg-matrix-bg-accent border border-matrix-border-primary rounded text-matrix-text-secondary font-mono">
                       {market.category?.toUpperCase() || 'OTHER'}
@@ -165,11 +156,12 @@ export const MarketList: React.FC<MarketListProps> = ({
                     </span>
                   </div>
 
+                  {/* 市场问题 */}
                   <h4 className="text-matrix-text-primary font-semibold text-xs mb-3 line-clamp-2 min-h-[2.5rem]">
                     {market.question}
                   </h4>
 
-                  {/* YES / NO 价格 + Buy 按钮 */}
+                  {/* YES/NO 价格 + Buy 按钮 */}
                   <div className="grid grid-cols-2 gap-1.5 mb-2">
                     {/* YES */}
                     <div className="flex flex-col gap-1">
@@ -210,7 +202,7 @@ export const MarketList: React.FC<MarketListProps> = ({
                     </div>
                   </div>
 
-                  {/* 内联买入面板 */}
+                  {/* ✅ 关键：内联买入面板 */}
                   {isPanelOpen && (
                     <div
                       className={cn(
@@ -234,7 +226,7 @@ export const MarketList: React.FC<MarketListProps> = ({
                             value={amount}
                             onChange={(e) => setAmount(e.target.value)}
                             onClick={(e) => e.stopPropagation()}
-                            className="w-full bg-transparent text-xs font-mono text-matrix-text-primary py-1 focus:outline-none"
+                            className="w-full bg-transparent text-xs font-mono text-matrix-text-primary py-2 focus:outline-none"
                             placeholder="50"
                             min="1"
                             step="10"
@@ -244,22 +236,22 @@ export const MarketList: React.FC<MarketListProps> = ({
                         <button
                           onClick={(e) => handleBuy(e, market)}
                           className={cn(
-                            'px-3 py-1 rounded text-xs font-mono font-bold transition-all',
+                            'px-4 py-2 rounded text-xs font-mono font-bold transition-all shadow-md',
                             isYesPanelOpen
-                              ? 'bg-matrix-success text-black hover:opacity-90'
-                              : 'bg-matrix-error text-black hover:opacity-90'
+                              ? 'bg-matrix-success text-black hover:bg-green-400 active:scale-95'
+                              : 'bg-matrix-error text-black hover:bg-red-400 active:scale-95'
                           )}
                         >
-                          Confirm
+                          CONFIRM
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); setActivePanel(null) }}
-                          className="px-2 py-1 rounded text-xs font-mono text-matrix-text-muted hover:text-matrix-text-primary border border-matrix-border-tertiary"
+                          className="px-2 py-2 rounded text-xs font-mono text-matrix-text-muted hover:text-matrix-text-primary border border-matrix-border-tertiary"
                         >
                           ✕
                         </button>
                       </div>
-                      {/* 预估盈亏提示 */}
+                      {/* 预估盈亏 */}
                       {parseFloat(amount) > 0 && (
                         <div className="mt-1.5 text-xs font-mono text-matrix-text-muted">
                           预计获得:{' '}

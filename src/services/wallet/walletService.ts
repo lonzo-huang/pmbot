@@ -48,8 +48,27 @@ export class WalletService {
   }
   
   async checkApprovals(address: string): Promise<{ usdc: boolean; ctf: boolean }> {
-    // 简化版本 - 实际实现需要调用合约检查
-    return { usdc: false, ctf: false }
+    try {
+      if (!this.provider) return { usdc: false, ctf: false }
+
+      // USDC Allowance
+      const usdcAbi = ['function allowance(address owner, address spender) view returns (uint256)']
+      const usdcContract = new ethers.Contract(this.USDC_ADDRESS, usdcAbi, this.provider)
+      const usdcAllowance = await usdcContract.allowance(address, this.EXCHANGE_ADDRESS)
+
+      // CTF Approval
+      const ctfAbi = ['function isApprovedForAll(address owner, address operator) view returns (bool)']
+      const ctfContract = new ethers.Contract(this.CTF_ADDRESS, ctfAbi, this.provider)
+      const ctfApproved = await ctfContract.isApprovedForAll(address, this.EXCHANGE_ADDRESS)
+
+      return {
+        usdc: usdcAllowance > 0n,
+        ctf: ctfApproved
+      }
+    } catch (error) {
+      console.error('Failed to check approvals:', error)
+      return { usdc: false, ctf: false }
+    }
   }
   
   async approveUSDC(amount: bigint): Promise<string> {

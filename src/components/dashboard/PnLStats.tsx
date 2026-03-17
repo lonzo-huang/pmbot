@@ -1,28 +1,52 @@
 import React from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { MatrixCard } from '@/components/ui/MatrixCard'
+import { MatrixButton } from '@/components/ui/MatrixButton'
 import { formatCurrency, formatPercent } from '@/utils/formatting'
 import { cn } from '@/utils/cn'
 
 export const PnLStats: React.FC = () => {
-  const { positions, trading } = useAppStore()
+  const { positions, trading, clearTradeStats } = useAppStore()
 
-  const totalTrades = trading.tradeHistory?.length || 0
-  const winningTrades = trading.tradeHistory?.filter(t => (t.pnl || 0) > 0).length || 0
+  const closedTrades = trading.tradeHistory?.filter(t => t.type === 'sell' && typeof t.pnl === 'number') || []
+  const totalTrades = closedTrades.length
+  const winningTrades = closedTrades.filter(t => (t.pnl || 0) > 0).length
   const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0
 
-  const winningPnL = trading.tradeHistory
-    ?.filter(t => (t.pnl || 0) > 0)
-    .reduce((sum, t) => sum + (t.pnl || 0), 0) || 0
-  const losingPnL = trading.tradeHistory
-    ?.filter(t => (t.pnl || 0) <= 0)
-    .reduce((sum, t) => sum + (t.pnl || 0), 0) || 0
+  const winningPnL = closedTrades
+    .filter(t => (t.pnl || 0) > 0)
+    .reduce((sum, t) => sum + (t.pnl || 0), 0)
+  const losingPnL = closedTrades
+    .filter(t => (t.pnl || 0) <= 0)
+    .reduce((sum, t) => sum + (t.pnl || 0), 0)
 
   const avgWin = winningTrades > 0 ? winningPnL / winningTrades : 0
   const avgLoss = (totalTrades - winningTrades) > 0 ? losingPnL / (totalTrades - winningTrades) : 0
+  
+  // ✅ 新增：计算盈亏比 (Risk/Reward Ratio)
+  const riskRewardRatio = Math.abs(avgLoss) > 0.001 
+    ? Math.abs(avgWin / avgLoss) 
+    : (avgWin > 0 ? Infinity : 0)
 
   return (
-    <MatrixCard title="💰 PnL 统计" subtitle="交易盈亏统计分析">
+    <MatrixCard 
+      title="💰 PnL 统计" 
+      subtitle="交易盈亏统计分析"
+      headerExtra={
+        <MatrixButton 
+          variant="danger" 
+          size="sm"
+          disabled={totalTrades === 0}
+          onClick={() => {
+            if (confirm('确定要清除所有交易统计吗？此操作不可恢复。')) {
+              clearTradeStats()
+            }
+          }}
+        >
+          🗑️ 清除统计
+        </MatrixButton>
+      }
+    >
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <div className="p-3 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary/50">
           <div className="text-xs text-matrix-text-secondary font-mono mb-1">总盈亏</div>
@@ -69,9 +93,17 @@ export const PnLStats: React.FC = () => {
         </div>
 
         <div className="p-3 border border-matrix-border-tertiary rounded bg-matrix-bg-tertiary/50">
-          <div className="text-xs text-matrix-text-secondary font-mono mb-1">平均亏损</div>
-          <div className="text-lg font-bold font-mono text-matrix-error">
-            {formatCurrency(avgLoss)}
+          <div className="text-xs text-matrix-text-secondary font-mono mb-1">盈亏比 (R/R)</div>
+          <div className={cn(
+            'text-lg font-bold font-mono',
+            riskRewardRatio >= 2 ? 'text-matrix-success' : 
+              riskRewardRatio >= 1.5 ? 'text-matrix-warning' : 
+                riskRewardRatio > 0 ? 'text-matrix-error' : 'text-matrix-text-muted'
+          )}>
+            {riskRewardRatio === Infinity ? '∞' : riskRewardRatio.toFixed(2)}
+          </div>
+          <div className="text-xs text-matrix-text-muted font-mono mt-1">
+            {riskRewardRatio >= 2 ? '优秀' : riskRewardRatio >= 1.5 ? '一般' : riskRewardRatio > 0 ? '偏低' : '—'}
           </div>
         </div>
       </div>

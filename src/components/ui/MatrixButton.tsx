@@ -1,11 +1,12 @@
 import React from 'react'
 
 interface MatrixButtonProps {
-  variant?: 'primary' | 'secondary' | 'danger'
+  variant?: 'primary' | 'secondary' | 'danger' | 'success'
   size?: 'sm' | 'md' | 'lg'
   loading?: boolean
   disabled?: boolean
-  onClick: () => void
+  onClick: React.MouseEventHandler<HTMLButtonElement>
+  fullWidth?: boolean
   children: React.ReactNode
   className?: string
 }
@@ -16,6 +17,7 @@ export const MatrixButton: React.FC<MatrixButtonProps> = ({
   loading = false,
   disabled = false,
   onClick,
+  fullWidth = false,
   children,
   className = ''
 }) => {
@@ -29,13 +31,14 @@ export const MatrixButton: React.FC<MatrixButtonProps> = ({
   
   const variantClasses = {
     primary: "bg-green-900 border-green-500 text-green-400 hover:bg-green-800 hover:shadow-lg hover:shadow-green-500/50",
+    success: "bg-green-900 border-green-500 text-green-400 hover:bg-green-800 hover:shadow-lg hover:shadow-green-500/50",
     secondary: "bg-gray-800 border-gray-600 text-gray-400 hover:border-green-500",
     danger: "bg-red-900 border-red-500 text-red-400 hover:bg-red-800 hover:shadow-lg hover:shadow-red-500/50"
   }
   
   return (
     <button
-      className={`${baseClasses} ${sizeClasses[size]} ${variantClasses[variant]} ${className} ${
+      className={`${baseClasses} ${sizeClasses[size]} ${variantClasses[variant]} ${fullWidth ? 'w-full' : ''} ${className} ${
         disabled || loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
       }`}
       onClick={onClick}

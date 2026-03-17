@@ -12,7 +12,8 @@ export function formatNumber(num: number, decimals: number = 2): string {
  * Format currency (USDC)
  */
 export function formatCurrency(amount: number, decimals: number = 2): string {
-  return `$${formatNumber(Math.abs(amount), decimals)}`
+  const sign = amount < 0 ? '-' : ''
+  return `${sign}$${formatNumber(Math.abs(amount), decimals)}`
 }
 
 /**

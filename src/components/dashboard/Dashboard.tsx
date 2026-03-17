@@ -7,6 +7,7 @@ import { ActivityFeed } from './ActivityFeed'
 import { PnLStats } from './PnLStats'
 import { cn } from '@/utils/cn'
 import { formatCurrency } from '@/utils/formatting'
+import { realtimeService } from '@/services/realtime/RealtimeService'
 
 export const Dashboard: React.FC = () => {
   const {
@@ -26,6 +27,17 @@ export const Dashboard: React.FC = () => {
       newState ? 'success' : 'info'
     )
   }
+
+  const wsStatus = realtimeService.getStatus()
+  const dataHealth = React.useMemo(() => {
+    const first = positions.active?.[0]
+    if (!first) return { label: 'N/A', className: 'text-matrix-text-secondary' }
+    const lastUpdate = realtimeService.getLastUpdate(first.tokenId)
+    if (!lastUpdate) return { label: 'NO DATA', className: 'text-matrix-warning' }
+    const ageMs = Date.now() - lastUpdate
+    if (ageMs <= 15000) return { label: `OK ${Math.round(ageMs / 1000)}s`, className: 'text-matrix-success' }
+    return { label: `STALE ${Math.round(ageMs / 1000)}s`, className: 'text-matrix-warning' }
+  }, [positions.active?.length, positions.active?.[0]?.tokenId])
 
   return (
     <div className="space-y-6">
@@ -78,6 +90,16 @@ export const Dashboard: React.FC = () => {
             <div className="text-xs text-matrix-text-secondary font-mono">
               纸面交易：{settings.paperTradingMode ? 'ON' : 'OFF'}
             </div>
+            <div className="text-xs font-mono flex justify-between">
+              <span className="text-matrix-text-secondary">WS:</span>
+              <span className={cn(wsStatus === 'connected' ? 'text-matrix-success' : 'text-matrix-warning')}>
+                {wsStatus.toUpperCase()}
+              </span>
+            </div>
+            <div className="text-xs font-mono flex justify-between">
+              <span className="text-matrix-text-secondary">DATA:</span>
+              <span className={dataHealth.className}>{dataHealth.label}</span>
+            </div>
           </div>
         </MatrixCard>
 
@@ -97,7 +119,7 @@ export const Dashboard: React.FC = () => {
                   (positions.pnl?.total ?? 0) >= 0 ? 'text-matrix-success' : 'text-matrix-error'
                 )}
               >
-                ${(positions.pnl?.total ?? 0).toFixed(2)}
+                {formatCurrency(positions.pnl?.total ?? 0)}
               </span>
             </div>
             <div className="flex justify-between">
@@ -107,7 +129,7 @@ export const Dashboard: React.FC = () => {
                   (positions.pnl?.unrealized ?? 0) >= 0 ? 'text-matrix-success' : 'text-matrix-error'
                 )}
               >
-                ${(positions.pnl?.unrealized ?? 0).toFixed(2)}
+                {formatCurrency(positions.pnl?.unrealized ?? 0)}
               </span>
             </div>
           </div>

@@ -11,6 +11,8 @@ import { PortfolioView } from '@/components/portfolio/PortfolioView'
 // ✅ 新增：导入心跳循环和记忆管理器
 import { heartbeatLoop } from '@/services/agent/HeartbeatLoop'
 import { memoryManager } from '@/services/agent/MemoryManager'
+import { realtimeService } from '@/services/realtime/RealtimeService'
+import '@/services/trading/TradingService'
 
 
 function App() {
@@ -18,6 +20,7 @@ function App() {
   const currentView = useAppStore((state) => state.ui.currentView)
   const addNotification = useAppStore((state) => state.addNotification)
   const setView = useAppStore((state) => state.setView)
+  const handleMarketData = useAppStore((state) => state.handleMarketData)
 
   // ✅ 新增：获取策略状态和钱包信息
   const strategy = useAppStore((state) => state.strategy)
@@ -32,6 +35,15 @@ function App() {
     // MemoryManager 使用 localStorage，无需目录初始化
     // 预加载默认记忆内容（首次运行时自动创建）
     memoryManager.read('strategy').catch(() => {})
+
+    // ✅ 新增：全局监听实时数据更新 Store
+    const unsubscribe = realtimeService.onMessage((data) => {
+      handleMarketData(data)
+    })
+
+    return () => {
+      unsubscribe()
+    }
   }, [])
 
   // ✅ 启动/停止心跳循环（自主决策核心）
@@ -65,6 +77,10 @@ function App() {
       case 'dashboard':
         return <Dashboard />
       case 'markets':
+        return <MarketsView />
+      case 'markets-polymarket':
+        return <MarketsView />
+      case 'markets-stockmarket':
         return <MarketsView />
       case 'positions':
         return <PortfolioView />

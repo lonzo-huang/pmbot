@@ -10,10 +10,14 @@ import type { EncryptedWallet } from '@/services/wallet/WalletManager'
 
 const navItems = [
   { id: 'dashboard', label: 'DASHBOARD', icon: '📊' },
-  { id: 'markets', label: 'MARKETS', icon: '🔍' },
   { id: 'positions', label: 'POSITIONS', icon: '💼' },
   { id: 'activity', label: 'ACTIVITY', icon: '📝' },
   { id: 'settings', label: 'SETTINGS', icon: '⚙️' },
+]
+
+const marketSubItems = [
+  { id: 'markets-polymarket', label: 'POLYMARKET', icon: '🟧' },
+  { id: 'markets-stockmarket', label: 'STOCKMARKET', icon: '🟦' },
 ]
 
 export const Sidebar: React.FC = () => {
@@ -37,6 +41,7 @@ export const Sidebar: React.FC = () => {
   const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null)
   const [connectionLogs, setConnectionLogs] = useState<string[]>([])
   const [lastConnectedRpc, setLastConnectedRpc] = useState<string>('')
+  const [marketsExpanded, setMarketsExpanded] = useState<boolean>(() => currentView.startsWith('markets'))
 
   // ✅ 新增：自动同步状态
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true)
@@ -53,6 +58,12 @@ export const Sidebar: React.FC = () => {
     console.log('🖱️ [Sidebar] 按钮点击:', viewId)
     setView(viewId)
   }
+
+  useEffect(() => {
+    if (currentView.startsWith('markets')) {
+      setMarketsExpanded(true)
+    }
+  }, [currentView])
 
   const handleWalletClick = () => {
     if (wallet.isConnected) {
@@ -119,7 +130,7 @@ export const Sidebar: React.FC = () => {
         'MATIC 余额查询超时'
       )
 
-      result.matic = Number(ethers.formatEther(balance))
+      result.matic = Number(ethers.formatEther(balance as any))
       addConnectionLog(`✅ MATIC 余额：${result.matic.toFixed(4)} MATIC`)
     } catch (e: any) {
       console.warn('❌ MATIC 余额获取失败:', e.message)
@@ -145,7 +156,7 @@ export const Sidebar: React.FC = () => {
           const provider = new ethers.JsonRpcProvider(
             rpc.url,
             { chainId: 137, name: 'polygon' },
-            { staticNetwork: true, timeout: rpc.timeout }
+            { staticNetwork: true, timeout: rpc.timeout } as any
           )
           await provider.getNetwork()
 
@@ -233,13 +244,13 @@ export const Sidebar: React.FC = () => {
           const testProvider = new ethers.JsonRpcProvider(
             rpc.url,
             { chainId: 137, name: 'polygon' },
-            { staticNetwork: true, timeout: rpc.timeout }
+            { staticNetwork: true, timeout: rpc.timeout } as any
           )
 
           // 测试连接
           await withTimeout(
             testProvider.getNetwork(),
-            rpc.timeout,
+            rpc.timeout ?? 10000,
             `${rpc.name} 连接超时`
           )
 
@@ -430,6 +441,45 @@ export const Sidebar: React.FC = () => {
 
         {/* Navigation */}
         <nav className="p-4 space-y-2 flex-1 overflow-y-auto">
+          <button
+            onClick={() => {
+              setMarketsExpanded((prev) => !prev)
+              setView('markets-polymarket')
+            }}
+            className={cn(
+              'w-full text-left px-4 py-3 rounded border transition-all duration-300 font-mono text-sm',
+              currentView === 'markets' || currentView.startsWith('markets-')
+                ? 'bg-matrix-bg-accent border-matrix-border-primary text-matrix-text-primary'
+                : 'bg-transparent border-matrix-border-tertiary text-matrix-text-secondary hover:border-matrix-border-primary hover:text-matrix-text-primary'
+            )}
+            style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+          >
+            <span className="mr-3">🔍</span>
+            MARKETS
+            <span className="float-right text-xs">{marketsExpanded ? '▾' : '▸'}</span>
+          </button>
+
+          {marketsExpanded && (
+            <div className="space-y-2 pl-4">
+              {marketSubItems.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => handleClick(item.id)}
+                  className={cn(
+                    'w-full text-left px-4 py-2 rounded border transition-all duration-300 font-mono text-xs',
+                    currentView === item.id
+                      ? 'bg-matrix-bg-accent border-matrix-border-primary text-matrix-text-primary'
+                      : 'bg-transparent border-matrix-border-tertiary text-matrix-text-secondary hover:border-matrix-border-primary hover:text-matrix-text-primary'
+                  )}
+                  style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                >
+                  <span className="mr-3">{item.icon}</span>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {navItems.map((item) => (
             <button
               key={item.id}

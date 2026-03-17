@@ -12,8 +12,9 @@ interface MarketScannerProps {
   tradeSignalsCount: number
   onToggleStrategy: () => void
   onShowMarketSelector: () => void
-  onScan: () => void
   onShowPopularMarkets: () => void
+  onScan: () => void
+  onClear: () => void
 }
 
 export const MarketScanner: React.FC<MarketScannerProps> = ({
@@ -24,8 +25,9 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
   tradeSignalsCount,
   onToggleStrategy,
   onShowMarketSelector,
-  onScan,
   onShowPopularMarkets,
+  onScan,
+  onClear,
 }) => {
   return (
     <MatrixCard title="MARKET SCANNER" subtitle="Real-time Polymarket data via WebSocket">
@@ -47,6 +49,13 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
         </div>
         <div className="flex gap-2">
           <MatrixButton
+            variant="danger"
+            onClick={onClear}
+            className="px-2 py-1 text-xs"
+          >
+            🧹 Clear
+          </MatrixButton>
+          <MatrixButton
             variant="secondary"
             onClick={onShowPopularMarkets}
           >
@@ -66,7 +75,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
             disabled={scanStatus === 'scanning'}
             variant={scanStatus === 'connected' ? 'success' : 'primary'}
           >
-            {scanStatus === 'connected' ? '● CONNECTED' : 'CONNECT'}
+            {scanStatus === 'connected' ? '● DISCONNECT' : 'CONNECT'}
           </MatrixButton>
         </div>
       </div>

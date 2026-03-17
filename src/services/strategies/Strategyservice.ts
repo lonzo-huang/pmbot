@@ -7,6 +7,8 @@
  */
 
 import { MarketData, MarketAnalysis, realtimeService } from '@/services/realtime/RealtimeService'
+import { binanceBtcService } from '@/services/marketdata/BinanceBtcService'
+import { useAppStore } from '@/stores/appStore'
 
 // ============================================
 // 策略类型定义
@@ -95,270 +97,122 @@ abstract class BaseStrategy {
 }
 
 
-// ============================================
-// 策略 1: 套利策略 (Arbitrage)
-// ============================================
-
-export class ArbitrageStrategy extends BaseStrategy {
-  private readonly MIN_PROFIT_MARGIN = 0.005  // 0.5% 最小利润
-
-  constructor(config: Partial<StrategyConfig> = {}) {
-    super('Arbitrage', config)
-  }
-
-  analyze(data: MarketData, analysis: MarketAnalysis): TradeSignal | null {
-    if (!this.canTrade()) return null
-
-    // 套利条件：YES价格 + NO价格 < 1.0（扣除手续费后有利润）
-    const yesPrice = analysis.bestAsk
-    const noPrice = 1 - analysis.bestBid
-
-    const totalCost = yesPrice + noPrice
-    const profitMargin = 1 - totalCost
-
-    if (profitMargin > this.MIN_PROFIT_MARGIN) {
-      const confidence = Math.min(profitMargin * 10, 1)
-
-      return {
-        strategy: this.name,
-        asset_id: analysis.asset_id,
-        action: 'buy',
-        side: 'yes',
-        price: yesPrice,
-        size: this.config.maxPositionSize / 2,
-        confidence,
-        reason: `套利机会：总成本 ${(totalCost * 100).toFixed(2)}¢，利润率 ${(profitMargin * 100).toFixed(2)}%`,
-        timestamp: Date.now(),
-      }
-    }
-
-    return null
-  }
-}
-
-
-// ============================================
-// 策略 2: 订单簿不平衡策略 (Order Book Imbalance)
-// ============================================
-
-export class ImbalanceStrategy extends BaseStrategy {
-  private readonly IMBALANCE_THRESHOLD = 0.4  // 40% 不平衡触发
+export class Btc5mBinaryEVStrategy extends BaseStrategy {
+  private readonly T = 300
+  private readonly minEntrySec = 60
+  private readonly maxEntrySec = 240
+  private readonly lateEntrySec = 290
+  private readonly evThreshold = 0.05
+  private readonly lateEvThreshold = 0.10
+  private readonly maxLatePrice = 0.92
 
   constructor(config: Partial<StrategyConfig> = {}) {
-    super('OrderBookImbalance', config)
+    super('BTC5mBinaryEV', { cooldownMs: 1500, minConfidence: 0.3, ...config })
   }
 
-  analyze(data: MarketData, analysis: MarketAnalysis): TradeSignal | null {
+  analyze(_data: MarketData, analysis: MarketAnalysis): TradeSignal | null {
     if (!this.canTrade()) return null
-    if (data.type !== 'book') return null
 
-    const { imbalance, spreadPercent, bestBid, bestAsk } = analysis
+    const store = useAppStore.getState()
+    const market = store.markets.activeMarkets.find(m => (m.assetIds || []).includes(analysis.asset_id))
+    if (!market) return null
 
-    // 价差太大不交易
-    if (spreadPercent > 3) return null
+    const q = (market.question || '').toLowerCase()
+    const isBtc = q.includes('bitcoin') || q.includes('btc')
+    const is5m = /(5\s*(min|m)\b|5-minute)/i.test(q)
+    if (!isBtc || !is5m) return null
 
-    if (Math.abs(imbalance) < this.IMBALANCE_THRESHOLD) return null
+    const yesTokenId = market.assetIds?.[0]
+    const noTokenId = market.assetIds?.[1]
+    if (!yesTokenId || !noTokenId) return null
 
-    const confidence = Math.min(Math.abs(imbalance), 1)
+    const yesAsk = bestAsk(yesTokenId)
+    const noAsk = bestAsk(noTokenId)
+    if (!yesAsk || !noAsk) return null
 
-    if (confidence < this.config.minConfidence) return null
-
-    if (imbalance > this.IMBALANCE_THRESHOLD) {
-      return {
-        strategy: this.name,
-        asset_id: analysis.asset_id,
-        action: 'buy',
-        side: 'yes',
-        price: bestAsk,
-        size: this.config.maxPositionSize * confidence,
-        confidence,
-        reason: `买压强劲，不平衡度 ${(imbalance * 100).toFixed(1)}%，预期价格上涨`,
-        timestamp: Date.now(),
-      }
-    } else if (imbalance < -this.IMBALANCE_THRESHOLD) {
-      return {
-        strategy: this.name,
-        asset_id: analysis.asset_id,
-        action: 'buy',
-        side: 'no',
-        price: 1 - bestBid,
-        size: this.config.maxPositionSize * confidence,
-        confidence,
-        reason: `卖压强劲，不平衡度 ${(imbalance * 100).toFixed(1)}%，预期价格下跌`,
-        timestamp: Date.now(),
-      }
-    }
-
-    return null
-  }
-}
-
-
-// ============================================
-// 策略 3: 价差收窄策略 (Spread Capture / Market Making)
-// ============================================
-
-export class SpreadStrategy extends BaseStrategy {
-  private readonly MIN_SPREAD_PERCENT = 2
-  private readonly MAX_SPREAD_PERCENT = 10
-
-  constructor(config: Partial<StrategyConfig> = {}) {
-    super('SpreadCapture', config)
+    return this.evaluate(yesTokenId, noTokenId, yesAsk, noAsk)
   }
 
-  analyze(data: MarketData, analysis: MarketAnalysis): TradeSignal | null {
-    if (!this.canTrade()) return null
-    if (data.type !== 'book') return null
+  private evaluate(yesTokenId: string, noTokenId: string, oYes: number, oNo: number): TradeSignal | null {
+    const now = Date.now()
 
-    const { spreadPercent, bestBid, bestAsk } = analysis
+    return this.computeSignal(now, yesTokenId, noTokenId, oYes, oNo)
+  }
 
-    if (spreadPercent < this.MIN_SPREAD_PERCENT || spreadPercent > this.MAX_SPREAD_PERCENT) {
+  private computeSignal(now: number, yesTokenId: string, noTokenId: string, oYes: number, oNo: number): TradeSignal | null {
+    const snapshot = (this as any)._btcState as any
+    if (!snapshot) {
+      binanceBtcService.getBtc5mState().then(s => {
+        ;(this as any)._btcState = s
+      }).catch(() => {})
       return null
     }
 
-    const expectedProfit = spreadPercent / 2
-    const confidence = Math.min(expectedProfit / 5, 1)
+    const ageMs = now - (snapshot.updatedAtMs || 0)
+    if (ageMs > 5000) {
+      binanceBtcService.getBtc5mState().then(s => {
+        ;(this as any)._btcState = s
+      }).catch(() => {})
+      if (ageMs > 60_000) return null
+    }
 
-    if (confidence < this.config.minConfidence) return null
+    const startTimeMs = snapshot.startTimeMs
+    const startPrice = snapshot.startPrice
+    const currentPrice = snapshot.currentPrice
+    const sigmaPerSecond = snapshot.sigmaPerSecond
 
-    const limitPrice = bestBid + (bestAsk - bestBid) * 0.3
+    const elapsedSec = Math.max(0, Math.min(this.T, (now - startTimeMs) / 1000))
+    const remainingSec = Math.max(1, this.T - elapsedSec)
+
+    if (elapsedSec < this.minEntrySec) return null
+    if (elapsedSec > this.lateEntrySec) return null
+
+    const sigmaRem = sigmaPerSecond * Math.sqrt(remainingSec)
+    if (!Number.isFinite(sigmaRem) || sigmaRem <= 0) return null
+
+    const delta = Math.log(currentPrice / startPrice)
+    const z = delta / sigmaRem
+    const pYes = normalCdf(z)
+
+    const edgeYes = pYes - oYes
+    const edgeNo = (1 - pYes) - oNo
+
+    const threshold = elapsedSec <= this.maxEntrySec ? this.evThreshold : this.lateEvThreshold
+    const maxPrice = elapsedSec <= this.maxEntrySec ? 0.98 : this.maxLatePrice
+
+    let chosen: { tokenId: string; side: 'yes' | 'no'; price: number; edge: number } | null = null
+    if (edgeYes > threshold && oYes <= maxPrice) {
+      chosen = { tokenId: yesTokenId, side: 'yes', price: oYes, edge: edgeYes }
+    }
+    if (edgeNo > threshold && oNo <= maxPrice) {
+      if (!chosen || edgeNo > chosen.edge) {
+        chosen = { tokenId: noTokenId, side: 'no', price: oNo, edge: edgeNo }
+      }
+    }
+    if (!chosen) return null
+
+    const confidence = clamp(chosen.edge / 0.20, 0, 1)
+    const size = Math.max(10, this.config.maxPositionSize * clamp((chosen.edge - threshold) / 0.15, 0.2, 1))
+
+    const reason = [
+      `t=${elapsedSec.toFixed(0)}s`,
+      `P_yes=${(pYes * 100).toFixed(1)}%`,
+      `O_yes=${(oYes * 100).toFixed(1)}¢`,
+      `O_no=${(oNo * 100).toFixed(1)}¢`,
+      `edge=${(chosen.edge * 100).toFixed(1)}%`,
+      `z=${z.toFixed(2)}`,
+    ].join(' | ')
 
     return {
       strategy: this.name,
-      asset_id: analysis.asset_id,
+      asset_id: chosen.tokenId,
       action: 'buy',
-      side: 'yes',
-      price: limitPrice,
-      size: this.config.maxPositionSize * 0.5,
+      side: chosen.side,
+      price: chosen.price,
+      size,
       confidence,
-      reason: `价差 ${spreadPercent.toFixed(2)}%，在 ${(limitPrice * 100).toFixed(1)}¢ 挂买单`,
-      timestamp: Date.now(),
-    }
-  }
-}
-
-
-// ============================================
-// 策略 4: 均值回归策略 (Mean Reversion)
-// ============================================
-
-export class MeanReversionStrategy extends BaseStrategy {
-  private readonly LOOKBACK_PERIOD = 20
-  private readonly DEVIATION_THRESHOLD = 0.05
-
-  constructor(config: Partial<StrategyConfig> = {}) {
-    super('MeanReversion', config)
-  }
-
-  analyze(data: MarketData, analysis: MarketAnalysis): TradeSignal | null {
-    if (!this.canTrade()) return null
-
-    const priceHistory = realtimeService.getPriceHistory(analysis.asset_id)
-
-    if (priceHistory.length < this.LOOKBACK_PERIOD) {
-      return null
-    }
-
-    const recentPrices = priceHistory.slice(-this.LOOKBACK_PERIOD)
-    const sma = recentPrices.reduce((a, b) => a + b, 0) / recentPrices.length
-
-    const currentPrice = analysis.midPrice
-    const deviation = (currentPrice - sma) / sma
-
-    if (Math.abs(deviation) < this.DEVIATION_THRESHOLD) {
-      return null
-    }
-
-    const confidence = Math.min(Math.abs(deviation) * 5, 1)
-
-    if (confidence < this.config.minConfidence) return null
-
-    if (deviation > this.DEVIATION_THRESHOLD) {
-      return {
-        strategy: this.name,
-        asset_id: analysis.asset_id,
-        action: 'buy',
-        side: 'no',
-        price: 1 - analysis.bestBid,
-        size: this.config.maxPositionSize * confidence,
-        confidence,
-        reason: `价格高于均值 ${(deviation * 100).toFixed(1)}%，预期回归`,
-        timestamp: Date.now(),
-      }
-    } else {
-      return {
-        strategy: this.name,
-        asset_id: analysis.asset_id,
-        action: 'buy',
-        side: 'yes',
-        price: analysis.bestAsk,
-        size: this.config.maxPositionSize * confidence,
-        confidence,
-        reason: `价格低于均值 ${(deviation * 100).toFixed(1)}%，预期反弹`,
-        timestamp: Date.now(),
-      }
-    }
-  }
-}
-
-
-// ============================================
-// 策略 5: 动量策略 (Momentum)
-// ============================================
-
-export class MomentumStrategy extends BaseStrategy {
-  private readonly LOOKBACK_PERIOD = 10
-  private readonly MOMENTUM_THRESHOLD = 0.02
-
-  constructor(config: Partial<StrategyConfig> = {}) {
-    super('Momentum', config)
-  }
-
-  analyze(data: MarketData, analysis: MarketAnalysis): TradeSignal | null {
-    if (!this.canTrade()) return null
-
-    const priceHistory = realtimeService.getPriceHistory(analysis.asset_id)
-
-    if (priceHistory.length < this.LOOKBACK_PERIOD + 1) {
-      return null
-    }
-
-    const currentPrice = priceHistory[priceHistory.length - 1]
-    const oldPrice = priceHistory[priceHistory.length - this.LOOKBACK_PERIOD - 1]
-    const momentum = (currentPrice - oldPrice) / oldPrice
-
-    if (Math.abs(momentum) < this.MOMENTUM_THRESHOLD) {
-      return null
-    }
-
-    const confidence = Math.min(Math.abs(momentum) * 10, 1)
-
-    if (confidence < this.config.minConfidence) return null
-
-    if (momentum > this.MOMENTUM_THRESHOLD) {
-      return {
-        strategy: this.name,
-        asset_id: analysis.asset_id,
-        action: 'buy',
-        side: 'yes',
-        price: analysis.bestAsk,
-        size: this.config.maxPositionSize * confidence,
-        confidence,
-        reason: `上涨动量 ${(momentum * 100).toFixed(1)}%，跟随趋势`,
-        timestamp: Date.now(),
-      }
-    } else {
-      return {
-        strategy: this.name,
-        asset_id: analysis.asset_id,
-        action: 'buy',
-        side: 'no',
-        price: 1 - analysis.bestBid,
-        size: this.config.maxPositionSize * confidence,
-        confidence,
-        reason: `下跌动量 ${(momentum * 100).toFixed(1)}%，跟随趋势`,
-        timestamp: Date.now(),
-      }
+      reason,
+      timestamp: now,
     }
   }
 }
@@ -375,12 +229,7 @@ export class StrategyManager {
   private unsubscribe: (() => void) | null = null
 
   constructor() {
-    // 初始化所有策略
-    this.addStrategy(new ArbitrageStrategy())
-    this.addStrategy(new ImbalanceStrategy())
-    this.addStrategy(new SpreadStrategy())
-    this.addStrategy(new MeanReversionStrategy())
-    this.addStrategy(new MomentumStrategy())
+    this.addStrategy(new Btc5mBinaryEVStrategy())
   }
 
   addStrategy(strategy: BaseStrategy): void {
@@ -483,6 +332,33 @@ export class StrategyManager {
   }
 }
 
-// 导出单例
-export const strategyManager = new StrategyManager()
-export { BaseStrategy }
+function bestAsk(tokenId: string): number | null {
+  const book = realtimeService.getOrderBook(tokenId)
+  const ask = book?.asks?.[0]?.[0] || 0
+  if (ask > 0 && ask < 1) return ask
+  const history = realtimeService.getPriceHistory(tokenId)
+  const last = history.length > 0 ? history[history.length - 1] : 0
+  return last > 0 && last < 1 ? last : null
+}
+
+function normalCdf(z: number): number {
+  return 0.5 * (1 + erf(z / Math.SQRT2))
+}
+
+function erf(x: number): number {
+  const sign = x >= 0 ? 1 : -1
+  const ax = Math.abs(x)
+  const a1 = 0.254829592
+  const a2 = -0.284496736
+  const a3 = 1.421413741
+  const a4 = -1.453152027
+  const a5 = 1.061405429
+  const p = 0.3275911
+  const t = 1 / (1 + p * ax)
+  const y = 1 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * Math.exp(-ax * ax)
+  return sign * y
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v))
+}

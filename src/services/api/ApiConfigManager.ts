@@ -276,9 +276,10 @@ class ApiConfigManager {
       const config: Record<string, ApiConfig> = {}
 
       for (const [providerId, apiConfig] of Object.entries(encryptedConfig)) {
+        const safeConfig = apiConfig as any
         config[providerId] = {
-          ...apiConfig,
-          apiKey: await this.decryptKey(apiConfig.apiKey),
+          ...safeConfig,
+          apiKey: await this.decryptKey(safeConfig.apiKey),
         }
       }
 
@@ -293,7 +294,24 @@ class ApiConfigManager {
    */
   async getProviderConfig(providerId: string): Promise<ApiConfig | null> {
     const config = await this.getConfig()
-    return config[providerId] || null
+    let providerConfig = config[providerId] || null
+
+    // ✅ 修复：增加环境变量兜底 (Vite 模式)
+    if (!providerConfig || !providerConfig.apiKey) {
+      const envKey = import.meta.env[`VITE_${providerId.toUpperCase()}_API_KEY`]
+      if (envKey) {
+        console.log(`[ApiConfigManager] 🛡️ 使用环境变量中的 API Key: ${providerId}`)
+        providerConfig = {
+          providerId,
+          apiKey: envKey,
+          model: providerConfig?.model || API_PROVIDERS.find(p => p.id === providerId)?.defaultModel || 'gpt-4o',
+          maxTokens: providerConfig?.maxTokens || 2000,
+          temperature: providerConfig?.temperature || 0.3,
+        }
+      }
+    }
+
+    return providerConfig
   }
 
   /**
@@ -345,7 +363,6 @@ class ApiConfigManager {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        timeout: 5000,
       })
 
       return response.ok

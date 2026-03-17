@@ -2,6 +2,8 @@ import React from 'react'
 
 interface MatrixCardProps {
   title?: string
+  subtitle?: string
+  headerExtra?: React.ReactNode // ✅ 新增：支持标题右侧额外内容
   glow?: boolean
   error?: boolean
   children: React.ReactNode
@@ -10,6 +12,8 @@ interface MatrixCardProps {
 
 export const MatrixCard: React.FC<MatrixCardProps> = ({
   title,
+  subtitle,
+  headerExtra,
   glow = false,
   error = false,
   children,
@@ -32,9 +36,23 @@ export const MatrixCard: React.FC<MatrixCardProps> = ({
       }}
     >
       {title && (
-        <h3 className="text-green-400 font-bold mb-4 font-mono">
-          {title}
-        </h3>
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h3 className="text-green-400 font-bold font-mono uppercase tracking-wider">
+              {title}
+            </h3>
+            {subtitle && (
+              <div className="text-xs text-matrix-text-secondary font-mono mt-1">
+                {subtitle}
+              </div>
+            )}
+          </div>
+          {headerExtra && (
+            <div className="flex-shrink-0">
+              {headerExtra}
+            </div>
+          )}
+        </div>
       )}
       {children}
     </div>

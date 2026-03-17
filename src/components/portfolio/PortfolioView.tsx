@@ -1,29 +1,28 @@
 import React from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { MatrixCard } from '@/components/ui/MatrixCard'
+import { MatrixButton } from '@/components/ui/MatrixButton'
 import { PositionTable } from '@/components/dashboard/PositionTable'
 import { formatCurrency, formatPercent } from '@/utils/formatting'
 
 export const PortfolioView: React.FC = () => {
-  const { positions, trading } = useAppStore()
+  const { positions, trading, clearTradeStats } = useAppStore()
   
   const totalValue = positions.active.reduce(
-    (sum, pos) => sum + pos.size * pos.currentPrice,
+    (sum, pos) => sum + pos.amount * pos.currentPrice,
     0
   )
   
   const totalCost = positions.active.reduce(
-    (sum, pos) => sum + pos.size * pos.entryPrice,
+    (sum, pos) => sum + pos.amount * pos.entryPrice,
     0
   )
   
   const totalPnL = positions.pnl.total
-  const winRate =
-    trading.tradeHistory.length > 0
-      ? (trading.tradeHistory.filter((t) => (t.pnl || 0) > 0).length /
-          trading.tradeHistory.length) *
-        100
-      : 0
+  const totalTrades = trading.tradeHistory?.filter(t => t.type === 'sell' && typeof t.pnl === 'number').length || 0
+  const winRate = totalTrades > 0
+    ? (trading.tradeHistory.filter((t) => (t.pnl || 0) > 0).length / totalTrades) * 100
+    : 0
   
   return (
     <div className="space-y-6">
@@ -71,7 +70,7 @@ export const PortfolioView: React.FC = () => {
             {winRate.toFixed(1)}%
           </div>
           <div className="text-xs text-matrix-text-secondary font-mono mt-2">
-            {trading.tradeHistory.length} trades
+            {totalTrades} 已平仓交易
           </div>
         </MatrixCard>
       </div>
@@ -83,7 +82,23 @@ export const PortfolioView: React.FC = () => {
       />
       
       {/* Trade History */}
-      <MatrixCard title="TRADE HISTORY" subtitle="Recent trading activity">
+      <MatrixCard 
+        title="TRADE HISTORY"
+        headerExtra={
+          <MatrixButton 
+            variant="danger" 
+            size="sm"
+            disabled={totalTrades === 0}
+            onClick={() => {
+              if (confirm('确定要清除所有交易记录和统计吗？此操作不可恢复。')) {
+                clearTradeStats()
+              }
+            }}
+          >
+            🗑️ 清除统计
+          </MatrixButton>
+        }
+      >
         {trading.tradeHistory.length === 0 ? (
           <div className="text-center py-8 text-matrix-text-secondary font-mono">
             暂无交易记录
@@ -123,18 +138,18 @@ export const PortfolioView: React.FC = () => {
                       {new Date(trade.timestamp).toLocaleTimeString()}
                     </td>
                     <td className="p-3 text-matrix-text-primary font-mono text-sm truncate max-w-xs">
-                      {trade.marketId.substring(0, 12)}...
+                      {trade.marketId?.substring(0, 12) || 'N/A'}...
                     </td>
                     <td
                       className={cn(
                         'p-3 font-mono text-sm',
-                        trade.side === 'BUY' ? 'text-matrix-success' : 'text-matrix-error'
+                        trade.type === 'buy' ? 'text-matrix-success' : 'text-matrix-error'
                       )}
                     >
-                      {trade.side}
+                      {trade.type?.toUpperCase()}
                     </td>
                     <td className="p-3 text-right text-matrix-text-primary font-mono text-sm">
-                      {trade.size.toFixed(2)}
+                      {(trade.amount || 0).toFixed(2)}
                     </td>
                     <td className="p-3 text-right text-matrix-text-primary font-mono text-sm">
                       ${(trade.price * 100).toFixed(1)}¢
@@ -145,7 +160,7 @@ export const PortfolioView: React.FC = () => {
                         (trade.pnl || 0) >= 0 ? 'text-matrix-success' : 'text-matrix-error'
                       )}
                     >
-                      {trade.pnl ? formatCurrency(trade.pnl) : '-'}
+                      {typeof trade.pnl === 'number' ? formatCurrency(trade.pnl) : '-'}
                     </td>
                   </tr>
                 ))}

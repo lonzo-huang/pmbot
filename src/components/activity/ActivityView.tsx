@@ -2,18 +2,9 @@ import React from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { MatrixCard } from '@/components/ui/MatrixCard'
 import { cn } from '@/utils/cn'
-import { formatTimestamp } from '@/utils/formatting'
-
-interface ActivityItem {
-  id: string
-  timestamp: Date
-  type: 'scan' | 'bet' | 'sell' | 'error' | 'info' | 'analysis'
-  message: string
-  data?: any
-}
 
 export const ActivityView: React.FC = () => {
-  const { ui } = useAppStore()
+  const { trading } = useAppStore()
   const [filter, setFilter] = React.useState<string>('all')
   const [searchTerm, setSearchTerm] = React.useState('')
   
@@ -21,12 +12,14 @@ export const ActivityView: React.FC = () => {
     switch (type) {
       case 'error':
         return 'border-matrix-error bg-matrix-error/10 text-matrix-error'
-      case 'bet':
+      case 'trade':
         return 'border-matrix-success bg-matrix-success/10 text-matrix-success'
       case 'sell':
         return 'border-matrix-warning bg-matrix-warning/10 text-matrix-warning'
       case 'analysis':
         return 'border-matrix-info bg-matrix-info/10 text-matrix-info'
+      case 'signal':
+        return 'border-matrix-primary bg-matrix-primary/10 text-matrix-primary'
       case 'scan':
         return 'border-matrix-text-primary bg-matrix-bg-accent text-matrix-text-primary'
       default:
@@ -38,7 +31,7 @@ export const ActivityView: React.FC = () => {
     switch (type) {
       case 'error':
         return '❌'
-      case 'bet':
+      case 'trade':
         return '💰'
       case 'sell':
         return '💸'
@@ -46,12 +39,14 @@ export const ActivityView: React.FC = () => {
         return '🔍'
       case 'analysis':
         return '🤖'
+      case 'signal':
+        return '📡'
       default:
         return 'ℹ️'
     }
   }
   
-  const filteredActivities = ui.notifications.filter((item) => {
+  const filteredActivities = trading.activityLogs.filter((item) => {
     const matchesFilter = filter === 'all' || item.type === filter
     const matchesSearch = item.message.toLowerCase().includes(searchTerm.toLowerCase())
     return matchesFilter && matchesSearch
@@ -59,7 +54,18 @@ export const ActivityView: React.FC = () => {
   
   return (
     <div className="space-y-6">
-      <MatrixCard title="ACTIVITY LOG" subtitle="Complete system activity history">
+      <MatrixCard
+        title="ACTIVITY LOG"
+        subtitle="Complete system activity history"
+        headerExtra={
+          <div className="text-[10px] text-matrix-text-secondary font-mono text-right">
+            <div>LOGS: {trading.activityLogs.length}</div>
+            <div>
+              LAST: {trading.activityLogs[0]?.timestamp ? new Date(trading.activityLogs[0].timestamp).toLocaleTimeString() : 'N/A'}
+            </div>
+          </div>
+        }
+      >
         {/* Filters */}
         <div className="flex gap-4 mb-6">
           <select
@@ -68,12 +74,11 @@ export const ActivityView: React.FC = () => {
             className="bg-matrix-bg-tertiary border border-matrix-border-tertiary rounded px-3 py-2 text-sm font-mono text-matrix-text-primary"
           >
             <option value="all">All Types</option>
-            <option value="scan">Scans</option>
-            <option value="bet">Bets</option>
+            <option value="signal">Signals</option>
+            <option value="trade">Trades</option>
             <option value="sell">Sells</option>
             <option value="analysis">Analysis</option>
             <option value="error">Errors</option>
-            <option value="info">Info</option>
           </select>
           
           <input
@@ -106,7 +111,7 @@ export const ActivityView: React.FC = () => {
                     {activity.type.toUpperCase()}
                   </span>
                   <span className="text-xs text-matrix-text-secondary font-mono">
-                    {formatTimestamp(new Date())}
+                    {new Date(activity.timestamp).toLocaleTimeString()}
                   </span>
                 </div>
                 <div className="text-sm font-mono">{activity.message}</div>
@@ -130,25 +135,25 @@ export const ActivityView: React.FC = () => {
           <div className="grid grid-cols-4 gap-4 text-center">
             <div>
               <div className="text-2xl font-bold text-matrix-text-primary font-mono">
-                {ui.notifications.filter((n) => n.type === 'bet').length}
+                {trading.activityLogs.filter((n) => n.type === 'trade').length}
               </div>
-              <div className="text-xs text-matrix-text-secondary font-mono">BETS</div>
+              <div className="text-xs text-matrix-text-secondary font-mono">TRADES</div>
             </div>
             <div>
               <div className="text-2xl font-bold text-matrix-success font-mono">
-                {ui.notifications.filter((n) => n.type === 'sell' && n.message.includes('profit')).length}
+                {trading.activityLogs.filter((n) => n.type === 'signal').length}
               </div>
-              <div className="text-xs text-matrix-text-secondary font-mono">WINS</div>
+              <div className="text-xs text-matrix-text-secondary font-mono">SIGNALS</div>
             </div>
             <div>
               <div className="text-2xl font-bold text-matrix-error font-mono">
-                {ui.notifications.filter((n) => n.type === 'error').length}
+                {trading.activityLogs.filter((n) => n.type === 'error').length}
               </div>
               <div className="text-xs text-matrix-text-secondary font-mono">ERRORS</div>
             </div>
             <div>
               <div className="text-2xl font-bold text-matrix-info font-mono">
-                {ui.notifications.filter((n) => n.type === 'analysis').length}
+                {trading.activityLogs.filter((n) => n.type === 'analysis').length}
               </div>
               <div className="text-xs text-matrix-text-secondary font-mono">ANALYSIS</div>
             </div>

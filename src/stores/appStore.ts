@@ -19,6 +19,9 @@ export interface WalletState {
 
 export interface Market {
   id: string
+  conditionId?: string
+  slug?: string
+  type?: 'event' | 'market'
   question: string
   volume: number
   liquidity: number
@@ -64,6 +67,7 @@ export interface ActivityLog {
   type: string
   message: string
   timestamp: number
+  data?: any
 }
 
 export interface Notification {
@@ -108,6 +112,7 @@ export interface AppState {
     isActive: boolean
     activeOrders: any[]
     tradeHistory: Trade[]
+    activityLogs: ActivityLog[]
   }
 
   // LLM 状态
@@ -138,6 +143,8 @@ export interface AppState {
     currentView: string
     isScanning: boolean
     connectionStatus: 'online' | 'offline' | 'connecting'
+    messageCount: number
+    scanStatus: 'idle' | 'scanning' | 'connected' | 'error'
     errors: ErrorItem[]
     notifications: Notification[]
   }
@@ -161,6 +168,7 @@ interface AppStore extends AppState {
 
   // Market Actions
   setMarkets: (markets: Market[]) => void
+  handleMarketData: (data: any) => void
   setScanning: (isScanning: boolean) => void
   updateLastScanTime: (time: Date) => void
 
@@ -174,8 +182,10 @@ interface AppStore extends AppState {
   // Trading Actions
   setTradingActive: (active: boolean) => void
   addTrade: (trade: Trade) => void
+  addActivityLog: (log: Omit<ActivityLog, 'id' | 'timestamp'>) => void
   addOrder: (order: any) => void
   removeOrder: (orderId: string) => void
+  clearTradeStats: () => void
 
   // LLM Actions
   setAnalyzing: (analyzing: boolean) => void
@@ -190,6 +200,9 @@ interface AppStore extends AppState {
   // UI Actions
   setView: (view: string) => void
   setConnectionStatus: (status: 'online' | 'offline' | 'connecting') => void
+  setScanStatus: (status: 'idle' | 'scanning' | 'connected' | 'error') => void
+  setMessageCount: (count: number) => void
+  incrementMessageCount: () => void
   addError: (message: string, type?: string) => void
   addNotification: (message: string, type?: 'success' | 'error' | 'info') => void
   clearNotification: (id: string) => void
@@ -235,7 +248,8 @@ const initialState: AppState = {
   trading: {
     isActive: false,
     activeOrders: [],
-    tradeHistory: []
+    tradeHistory: [],
+    activityLogs: []
   },
   llm: {
     isAnalyzing: false,
@@ -258,6 +272,8 @@ const initialState: AppState = {
     currentView: 'dashboard',
     isScanning: false,
     connectionStatus: 'offline',
+    messageCount: 0,
+    scanStatus: 'idle',
     errors: [],
     notifications: []
   },
@@ -329,12 +345,121 @@ export const useAppStore = create<AppStore>()(
         })
       },
 
+      handleMarketData: (data) => {
+        if (!data || !data.data) return
+        const messageAssetId = (data.asset_id || '').toLowerCase()
+        const { activeMarkets } = get().markets
+        
+        // ✅ 优化匹配逻辑：尝试 ID, ConditionId 和 AssetIds (全部转为小写对比)
+        set((state) => ({
+          markets: {
+            ...state.markets,
+            activeMarkets: state.markets.activeMarkets.map(market => {
+              const marketId = (market.id || '').toLowerCase()
+              const conditionId = (market.conditionId || '').toLowerCase()
+              const assetIds = (market.assetIds || []).map(id => id.toLowerCase())
+
+              let assetIndex = -1
+              
+              // 1. 严格匹配 AssetId (不区分大小写)
+              assetIndex = assetIds.indexOf(messageAssetId)
+              
+              // ✅ 修复：移除 MarketId 兜底逻辑，防止 ID 混淆导致的 1-99 跳变
+              if (assetIndex === -1) return market
+
+              let tokenPrice = 0
+              const payload = data.data
+
+              if (payload.price !== undefined) {
+                tokenPrice = parseFloat(payload.price)
+              } else if (payload.bids && payload.asks && payload.bids.length > 0 && payload.asks.length > 0) {
+                // ✅ 修复 3：使用中间价而不是单边价，消除 YES/NO token 极高/极低价带来的跳变
+                const bestBid = payload.bids[0][0]
+                const bestAsk = payload.asks[0][0]
+                tokenPrice = (bestBid + bestAsk) / 2
+              } else if (payload.bids || payload.asks) {
+                const bestAsk = payload.asks?.[0]?.[0] || 0
+                const bestBid = payload.bids?.[0]?.[0] || 0
+                tokenPrice = bestAsk > 0 ? bestAsk : bestBid
+              }
+              
+              const liquidity = payload.bids 
+                ? (payload.bids.reduce((s: number, b: any) => s + (parseFloat(b[1]) || 0), 0) + (payload.asks?.reduce((s: number, a: any) => s + (parseFloat(a[1]) || 0), 0) || 0))
+                : market.liquidity
+              
+              // ✅ 允许更新流动性，即使价格暂时为 0
+              if (tokenPrice <= 0) {
+                return { ...market, liquidity: liquidity > 0 ? liquidity : market.liquidity }
+              }
+
+              const newPrices = [...(market.outcomePrices || [0.5, 0.5])]
+              const oldPrice = newPrices[assetIndex]
+              
+              // ✅ 修复 4：跳变保护逻辑修正
+              // 只有当旧价格在 3%-97% 之间（非归零或必中状态）时才启动大幅跳变保护
+              if (oldPrice > 0.03 && oldPrice < 0.97 && Math.abs(tokenPrice - oldPrice) > 0.4) {
+                const otherIndex = assetIndex === 0 ? 1 : 0
+                const otherPrice = newPrices[otherIndex]
+                
+                // 检查是否发生了 YES/NO 价格互换 (例如旧 YES 是 0.11, 新 YES 变成了 0.89)
+                if (Math.abs(tokenPrice - otherPrice) < 0.05) {
+                   // console.warn(`[Store] 🛡️ 拦截到 Token 价格互换`)
+                   return market
+                }
+                
+                // 任何单次 tick > 40% 的跳变都视为脏数据直接拦截
+                return market
+              }
+
+              newPrices[assetIndex] = tokenPrice
+              
+              const otherIndex = assetIndex === 0 ? 1 : 0
+              newPrices[otherIndex] = parseFloat((1 - tokenPrice).toFixed(4))
+              
+              return { 
+                ...market, 
+                outcomePrices: newPrices, 
+                liquidity: liquidity > 0 ? liquidity : market.liquidity,
+                lastUpdate: new Date()
+              }
+            })
+          }
+        }))
+      },
+
       setScanning: (isScanning) => {
         console.log('🔍 [Store] setScanning:', isScanning)
         set({
           ui: {
             ...get().ui,
             isScanning: isScanning ?? false
+          }
+        })
+      },
+
+      setScanStatus: (status) => {
+        set({
+          ui: {
+            ...get().ui,
+            scanStatus: status
+          }
+        })
+      },
+
+      setMessageCount: (count) => {
+        set({
+          ui: {
+            ...get().ui,
+            messageCount: count
+          }
+        })
+      },
+
+      incrementMessageCount: () => {
+        set({
+          ui: {
+            ...get().ui,
+            messageCount: get().ui.messageCount + 1
           }
         })
       },
@@ -423,6 +548,17 @@ export const useAppStore = create<AppStore>()(
         })
       },
 
+      addActivityLog: (log) => {
+        const id = Math.random().toString(36).substr(2, 9)
+        const timestamp = Date.now()
+        set({
+          trading: {
+            ...get().trading,
+            activityLogs: [{ ...log, id, timestamp }, ...get().trading.activityLogs].slice(0, 100)
+          }
+        })
+      },
+
       addOrder: (order) => {
         set({
           trading: {
@@ -437,6 +573,26 @@ export const useAppStore = create<AppStore>()(
           trading: {
             ...get().trading,
             activeOrders: get().trading.activeOrders.filter(o => o.orderId !== orderId)
+          }
+        })
+      },
+
+      clearTradeStats: () => {
+        console.log('🧹 [Store] clearTradeStats')
+        set({
+          trading: {
+            ...get().trading,
+            tradeHistory: [],
+            activityLogs: []
+          },
+          positions: {
+            ...get().positions,
+            pnl: {
+              total: 0,
+              today: 0,
+              unrealized: 0,
+              realized: 0
+            }
           }
         })
       },
@@ -628,11 +784,15 @@ export const useAppStore = create<AppStore>()(
           strategyManager.stop()
         }
 
-        // 更新全局状态
+        // ✅ 同步：当策略引擎启动时，默认也开启自动交易执行
         set({
           strategy: {
             isRunning: running,
             lastActiveAt: running ? Date.now() : get().strategy.lastActiveAt
+          },
+          trading: {
+            ...get().trading,
+            isActive: running // 同步自动交易状态
           }
         })
       }
@@ -656,10 +816,7 @@ export const useAppStore = create<AppStore>()(
           lastActiveAt: state.strategy.lastActiveAt
         }
       }),
-      version: 1,
-      migrate: (persistedState, version) => {
-        return persistedState as AppState
-      }
+      version: 1
     }
   )
 )

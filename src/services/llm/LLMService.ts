@@ -143,7 +143,10 @@ Example output:
       }
 
       const prompt = this.buildPrompt(context)
-      const response = await this.callLLM(config, prompt)
+      const response = await this.callLLM(
+        { ...config, providerId: config.providerId }, 
+        prompt
+      )
       const analysis = this.parseResponse(response, context)
 
       console.log('[LLMService] 分析完成:', analysis)
@@ -212,7 +215,7 @@ Example output:
 
       // 调用 LLM
       const response = await this.callLLM(
-        { ...config, model: model || config.model },
+        { ...config, providerId: config.providerId }, // ✅ 明确传递 providerId
         enhancedPrompt,
         { system, temperature, maxTokens }
       )
@@ -325,12 +328,15 @@ ${this.SCHEMA_PROMPT
   // ============================================
 
   private async callLLM(
-    config: { apiKey: string; model: string },
+    config: { apiKey: string; model: string; providerId?: string },
     prompt: string,
     options?: { system?: string; temperature?: number; maxTokens?: number }
   ): Promise<string> {
     const { system, temperature = 0.3, maxTokens = 500 } = options || {}
-    const providerId = this.detectProvider(config.model)
+    
+    // ✅ 修复：优先使用 config 中明确指定的 providerId
+    // 只有在未指定时才根据模型名称检测，防止 OpenRouter 请求被错误导向直连 Endpoint
+    const providerId = config.providerId || this.detectProvider(config.model)
     const providerConfig = this.PROVIDER_CONFIGS[providerId] || this.PROVIDER_CONFIGS.openrouter
 
     // 构建请求体
@@ -409,6 +415,11 @@ ${this.SCHEMA_PROMPT
    * 构建不同提供商的请求体
    */
   private buildRequestBody(providerId: string, base: any): any {
+    // ✅ 修复：如果是 OpenRouter，确保使用通用的 OpenAI 格式，不进行特殊转换
+    if (providerId === 'openrouter') {
+      return base
+    }
+
     if (providerId === 'anthropic') {
       // Anthropic 使用不同的消息格式
       return {

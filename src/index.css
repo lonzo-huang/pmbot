@@ -13,14 +13,12 @@ body {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   background-color: var(--matrix-darker);
   color: var(--matrix-green);
-  overflow: hidden; /* ✅ 防止页面滚动 */
 }
 
 /* ✅ 确保根容器占满屏幕 */
 #root {
   width: 100vw;
   height: 100vh;
-  overflow: hidden;
 }
 
 /* Matrix 雨效果 */

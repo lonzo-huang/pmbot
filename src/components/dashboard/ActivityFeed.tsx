@@ -4,16 +4,18 @@ import { MatrixCard } from '@/components/ui/MatrixCard'
 import { cn } from '@/utils/cn'
 
 export const ActivityFeed: React.FC = () => {
-  const { ui } = useAppStore()
+  const { trading } = useAppStore()
 
   const getActivityColor = (type: string) => {
     switch (type) {
       case 'error':
         return 'border-matrix-error bg-matrix-error/10'
-      case 'bet':
+      case 'trade':
         return 'border-matrix-success bg-matrix-success/10'
       case 'sell':
         return 'border-matrix-warning bg-matrix-warning/10'
+      case 'signal':
+        return 'border-matrix-primary bg-matrix-primary/10'
       default:
         return 'border-matrix-border-primary bg-matrix-bg-tertiary'
     }
@@ -23,7 +25,7 @@ export const ActivityFeed: React.FC = () => {
     switch (type) {
       case 'error':
         return '❌'
-      case 'bet':
+      case 'trade':
         return '💰'
       case 'sell':
         return '💸'
@@ -31,6 +33,8 @@ export const ActivityFeed: React.FC = () => {
         return '🔍'
       case 'analysis':
         return '🤖'
+      case 'signal':
+        return '📡'
       default:
         return 'ℹ️'
     }
@@ -39,29 +43,29 @@ export const ActivityFeed: React.FC = () => {
   return (
     <MatrixCard title="ACTIVITY LOG">
       <div className="max-h-96 overflow-y-auto space-y-2">
-        {ui.notifications.length === 0 ? (
+        {trading.activityLogs.length === 0 ? (
           <div className="text-center py-8 text-matrix-text-secondary">
             暂无活动记录
           </div>
         ) : (
-          ui.notifications.slice(0, 50).map((notification) => (
+          trading.activityLogs.map((log) => (
             <div
-              key={notification.id}
+              key={log.id}
               className={cn(
                 'p-3 border-l-2 rounded',
-                getActivityColor(notification.type)
+                getActivityColor(log.type)
               )}
             >
               <div className="flex justify-between items-start mb-1">
                 <span className="text-xs font-bold font-mono">
-                  {getActivityIcon(notification.type)} {notification.type.toUpperCase()}
+                  {getActivityIcon(log.type)} {log.type.toUpperCase()}
                 </span>
                 <span className="text-xs text-matrix-text-secondary font-mono">
-                  {new Date().toLocaleTimeString()}
+                  {new Date(log.timestamp).toLocaleTimeString()}
                 </span>
               </div>
               <div className="text-sm text-matrix-text-primary font-mono">
-                {notification.message}
+                {log.message}
               </div>
             </div>
           ))

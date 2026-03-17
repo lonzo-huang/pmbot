@@ -25,12 +25,11 @@ export interface AgentDecision {
 export class HeartbeatLoop {
   private intervalId: NodeJS.Timeout | null = null
   private isRunning = false
-  private llm: llmService
   private bankroll: number = 1000  // 默认本金 $1000
 
-constructor() {
-  // 无需操作，已使用导入的单例
-}
+  constructor() {
+    // 构造函数逻辑
+  }
 
   /**
    * 启动心跳循环
@@ -89,21 +88,31 @@ constructor() {
         positions: useAppStore.getState().positions.active
       })
 
-      // 4. LLM 决策
-      const decision = await this.llm.reason<AgentDecision>({
-        system: `你是一个专业的 Polymarket 交易专家。你的策略风格是: ${strategy.style}。`,
-        prompt,
-        outputSchema: {
-          action: { type: 'enum', values: ['BUY', 'SELL', 'HOLD', 'WAIT'] },
-          assetId: { type: 'string', optional: true },
-          side: { type: 'enum', values: ['yes', 'no'], optional: true },
-          size: { type: 'number', optional: true },
-          price: { type: 'number', optional: true },
-          confidence: { type: 'number', min: 0, max: 1 },
-          reasoning: { type: 'string' },
-          kellyResult: { type: 'object', optional: true }
+      // 4. LLM 决策 (增加 Fallback)
+      let decision: AgentDecision
+      try {
+        if (!llmService || typeof llmService.reason !== 'function') {
+          throw new Error('LLM Service unavailable')
         }
-      })
+
+        decision = await llmService.reason<AgentDecision>({
+          system: `你是一个专业的 Polymarket 交易专家。你的策略风格是: ${strategy.style}。`,
+          prompt,
+          outputSchema: {
+            action: { type: 'enum', values: ['BUY', 'SELL', 'HOLD', 'WAIT'] },
+            assetId: { type: 'string', optional: true },
+            side: { type: 'enum', values: ['yes', 'no'], optional: true },
+            size: { type: 'number', optional: true },
+            price: { type: 'number', optional: true },
+            confidence: { type: 'number', min: 0, max: 1 },
+            reasoning: { type: 'string' },
+            kellyResult: { type: 'object', optional: true }
+          }
+        })
+      } catch (llmError) {
+        console.warn('[HeartbeatLoop] 🤖 LLM 决策失败，切换到本地规则引擎:', llmError)
+        decision = this.fallbackRuleBasedDecision(strategy, marketSnapshot)
+      }
 
       console.log('[HeartbeatLoop] 🤖 决策:', decision.action, decision.reasoning)
 
@@ -120,6 +129,47 @@ constructor() {
     } catch (error) {
       console.error('[HeartbeatLoop] ❌ 决策循环错误:', error)
       await memoryManager.append('journal', `❌ 决策循环错误: ${error instanceof Error ? error.message : 'Unknown'}`)
+    }
+  }
+
+  /**
+   * 当 LLM 不可用时的备选决策逻辑 (单纯本地策略)
+   */
+  private fallbackRuleBasedDecision(strategy: any, marketSnapshot: string): AgentDecision {
+    const subscribed = realtimeService.getSubscribedAssets()
+    if (subscribed.length === 0) {
+      return {
+        action: 'WAIT',
+        confidence: 0,
+        reasoning: '没有订阅任何资产，无法决策。'
+      }
+    }
+
+    // 简单逻辑：如果资产有显著不平衡则触发
+    for (const assetId of subscribed) {
+      const book = realtimeService.getOrderBook(assetId)
+      if (!book) continue
+
+      const bestBid = book.bids[0]?.[0] || 0
+      const bestAsk = book.asks[0]?.[0] || 0
+      const spread = bestAsk - bestBid
+      
+      // 这里的逻辑可以根据 strategy.style 调整
+      // 简单起见，这里仅做示例：如果价差极小且有流动性
+      if (spread > 0 && spread < 0.05) {
+        return {
+          action: 'HOLD',
+          assetId,
+          confidence: 0.5,
+          reasoning: '本地策略: 市场流动性良好，但方向不明。LLM 离线中。'
+        }
+      }
+    }
+
+    return {
+      action: 'WAIT',
+      confidence: 0.1,
+      reasoning: '本地策略: 市场波动不足以触发规则决策。LLM 离线中。'
     }
   }
 

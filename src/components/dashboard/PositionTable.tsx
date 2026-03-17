@@ -1,5 +1,5 @@
 import React from 'react'
-import { Position } from '@/types'
+import { Position } from '@/stores/appStore'
 import { MatrixCard } from '@/components/ui/MatrixCard'
 import { MatrixButton } from '@/components/ui/MatrixButton'
 import { formatCurrency, formatPercent } from '@/utils/formatting'
@@ -54,12 +54,12 @@ export const PositionTable: React.FC<PositionTableProps> = ({
           </thead>
           <tbody>
             {positions.map((position) => {
-              // ✅ 添加空值保护：确保 pnl 存在
-              const pnlPercent = position.pnl?.percent ?? 0
-              const pnlDollar = position.pnl?.dollar ?? 0
               const entryPrice = position.entryPrice ?? 0
               const currentPrice = position.currentPrice ?? 0
-              const size = position.size ?? 0
+              const amount = position.amount ?? 0
+              const pnlDollar = position.pnl ?? 0
+              const entryValue = entryPrice * amount
+              const pnlPercent = entryValue > 0 ? pnlDollar / entryValue : 0
 
               return (
                 <tr
@@ -68,7 +68,7 @@ export const PositionTable: React.FC<PositionTableProps> = ({
                 >
                   <td className="p-3">
                     <div className="text-matrix-text-primary font-semibold text-sm max-w-xs truncate">
-                      {position.marketQuestion || 'Unknown Market'}
+                      {position.marketId || 'Unknown Market'}
                     </div>
                     <div className="text-matrix-text-muted text-xs font-mono">
                       {position.tokenId?.substring(0, 8) || 'N/A'}...
@@ -76,11 +76,11 @@ export const PositionTable: React.FC<PositionTableProps> = ({
                   </td>
                   <td className="p-3">
                     <span className="px-2 py-1 bg-matrix-bg-accent border border-matrix-border-primary rounded text-xs font-mono">
-                      {position.outcome || 'N/A'}
+                      {(position.outcome || 'N/A').toUpperCase()}
                     </span>
                   </td>
                   <td className="p-3 text-right font-mono text-matrix-text-primary">
-                    {size.toFixed(2)}
+                    {amount.toFixed(2)}
                   </td>
                   <td className="p-3 text-right font-mono text-matrix-text-primary">
                     ${(entryPrice * 100).toFixed(1)}¢

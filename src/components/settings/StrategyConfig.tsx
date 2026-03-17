@@ -4,7 +4,7 @@ import { MatrixButton } from '@/components/ui/MatrixButton'
 import { cn } from '@/utils/cn'
 // ✅ 架构核心：从 Store 获取状态
 import { useAppStore } from '@/stores/appStore'
-import { strategyManager } from '@/services/strategies/StrategyService'
+import { strategyManager } from '@/services/strategies'
 
 interface StrategyInfo {
   name: string
@@ -150,11 +150,7 @@ export const StrategyConfig: React.FC = () => {
 
 function getStrategyDescription(name: string): string {
   const descriptions: Record<string, string> = {
-    'Arbitrage': 'Exploits price differences between YES/NO shares',
-    'OrderBookImbalance': 'Trades based on buy/sell pressure imbalance',
-    'SpreadCapture': 'Profits from wide bid-ask spreads',
-    'MeanReversion': 'Trades when price deviates from average',
-    'Momentum': 'Follows price trend momentum',
+    'BTC5mBinaryEV': 'Uses BTC drift/vol + time decay to trade mispriced odds',
   }
   return descriptions[name] || 'Unknown strategy'
 }

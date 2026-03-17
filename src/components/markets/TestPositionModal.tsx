@@ -68,8 +68,7 @@ export const TestPositionModal: React.FC<TestPositionModalProps> = ({
     const current = parseFloat(currentPrice) || 0
     const amt = parseFloat(amount) || 0
     if (entry <= 0) return 0
-    // PnL = (current - entry) / entry * amount
-    return ((current - entry) / entry) * amt
+    return (current - entry) * amt
   }, [entryPrice, currentPrice, amount])
 
   const handleAddPosition = () => {
@@ -98,18 +97,12 @@ export const TestPositionModal: React.FC<TestPositionModalProps> = ({
     const position = {
       tokenId,
       marketId: selectedMarket.id,
-      marketQuestion: selectedMarket.question,
-      outcome: direction,
-      outcomeIndex: direction === 'YES' ? 0 : 1,
-      size: amt,
+      outcome: direction.toLowerCase(),
+      amount: amt,
       entryPrice: entry,
       currentPrice: isNaN(current) ? entry : current,
-      pnl: {
-        dollar: estimatedPnL,
-        percent: entry > 0 ? (estimatedPnL / (entry * amt)) : 0,
-      },
-      entryTime: new Date(),
-      lastUpdate: new Date(),
+      pnl: estimatedPnL,
+      openedAt: Date.now(),
     }
 
     addPosition(position)

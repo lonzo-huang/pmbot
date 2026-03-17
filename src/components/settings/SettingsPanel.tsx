@@ -9,7 +9,10 @@ import { StrategyConfig } from './StrategyConfig'
 import apiConfigManager, { API_PROVIDERS, type ApiProvider, type ApiConfig } from '@/services/api/ApiConfigManager'
 
 export const SettingsPanel: React.FC = () => {
-  const { settings, updateSettings, addNotification } = useAppStore()
+  const { settings, updateSettings, addNotification, trading, setTradingActive } = useAppStore()
+
+  // ✅ 新增：获取交易激活状态
+  const isAutoTrading = trading.isActive
 
   const [apiConfigs, setApiConfigs] = useState<Record<string, ApiConfig>>({})
   const [selectedProvider, setSelectedProvider] = useState<string>('openrouter')
@@ -184,6 +187,24 @@ export const SettingsPanel: React.FC = () => {
               {settings.autoSellEnabled ? '● ON' : '○ OFF'}
             </button>
           </div>
+
+          {/* ✅ 新增：自动执行信号开关 */}
+          <div>
+            <label className="text-xs text-matrix-text-secondary font-mono mb-2 block">
+              Strategy Execution (Auto-Trade)
+            </label>
+            <button
+              onClick={() => setTradingActive(!isAutoTrading)}
+              className={cn(
+                'w-full px-4 py-3 rounded border font-mono text-sm transition-all',
+                isAutoTrading
+                  ? 'bg-matrix-success border-matrix-success text-black font-bold shadow-[0_0_15px_rgba(0,255,0,0.3)]'
+                  : 'bg-matrix-bg-tertiary border-matrix-border-tertiary text-matrix-text-secondary'
+              )}
+            >
+              {isAutoTrading ? '● ENABLED' : '○ DISABLED'}
+            </button>
+          </div>
         </div>
       </MatrixCard>
 
@@ -194,7 +215,7 @@ export const SettingsPanel: React.FC = () => {
       <MatrixCard
         title="🤖 AI API Configuration"
         subtitle="Configure AI analysis service API Keys"
-        actions={
+        headerExtra={
           <MatrixButton variant="danger" size="sm" onClick={handleClearAll}>
             🗑️ Clear All
           </MatrixButton>

@@ -7,12 +7,22 @@
 
 import { ethers } from 'ethers'
 import { realtimeService } from '@/services/realtime/RealtimeService'
-import { strategyManager, TradeSignal } from '@/services/strategies/StrategyService'
+import { strategyManager, TradeSignal } from '@/services/strategies'
 import { useAppStore } from '@/stores/appStore'
+import { MarketScanner } from './MarketScanner'
+import { GammaClient } from '../api/gammaClient'
+import { Market } from '@/types'
+import { LLMService } from '../llm/LLMService'
 
 // ============================================
 // 类型定义
 // ============================================
+
+export interface MarketFilter {
+  underlyings?: string[]
+  duration?: string
+  active?: boolean
+}
 
 export interface CreateOrderParams {
   tokenId: string
@@ -87,6 +97,9 @@ export class TradingService {
   private minuteResetTime: number = 0
   private hourResetTime: number = 0
 
+  // Trading fee constant
+  private readonly TRADING_FEE_PERCENT = 0.02  // Polymarket 2% per trade
+
   // 配置（保留现有）
   private readonly MAX_ORDERS_PER_MINUTE = 10
   private readonly MAX_ORDERS_PER_HOUR = 50
@@ -96,7 +109,21 @@ export class TradingService {
   // ✅ 状态追踪（新增）
   private activeOrders: Map<string, Order> = new Map()
   private positions: Map<string, Position> = new Map()
+  private pendingAutoExits: Set<string> = new Set()
+  private subscribedPositionTokens: Set<string> = new Set()
+  private lastStorePositionsSignature: string = ''
+  private autoExitTimer: NodeJS.Timeout | null = null
   private tradeHistory: Order[] = []
+
+  // ✅ 交易限制（核心优化）
+  private readonly MAX_BUY_PRICE = 0.99
+  private readonly REVERSE_SIGNALS = false
+
+  // ✅ 市场扫描器
+  private marketScanner: MarketScanner
+
+  // ✅ LLM 审核服务
+  private llmService: LLMService
 
   // ✅ 策略信号订阅（新增）
   private strategyUnsubscribe: (() => void) | null = null
@@ -105,6 +132,10 @@ export class TradingService {
   constructor() {
     this.minuteResetTime = Date.now()
     this.hourResetTime = Date.now()
+
+    // 初始化服务
+    this.marketScanner = new MarketScanner(new GammaClient())
+    this.llmService = new LLMService()
 
     // 启动订单处理器（保留现有）
     this.startOrderProcessor()
@@ -115,7 +146,144 @@ export class TradingService {
     // ✅ 启动 PnL 更新（新增）
     this.startPnLUpdater()
 
+    // ✅ 同步 Store 状态（新增）
+    this.syncWithStore()
+
     console.log('[TradingService] ✅ 服务已初始化')
+  }
+
+  /**
+   * 与 Store 同步状态
+   */
+  private syncWithStore(): void {
+    // 初始化状态
+    const state = useAppStore.getState()
+    this.autoExecuteSignals = state.trading.isActive
+    this.isPaperTrading = state.settings.paperTradingMode
+
+    // 监听状态变化
+    useAppStore.subscribe((state) => {
+      const signature = (state.positions.active || [])
+        .map(p => `${p.tokenId}:${p.amount}:${p.entryPrice}:${p.currentPrice}:${p.pnl}`)
+        .join('|')
+      if (signature !== this.lastStorePositionsSignature) {
+        this.lastStorePositionsSignature = signature
+        this.reconcilePositionsFromStore(state)
+        this.scheduleAutoExitEvaluation()
+      }
+
+      if (this.autoExecuteSignals !== state.trading.isActive) {
+        this.autoExecuteSignals = state.trading.isActive
+        console.log('[TradingService] 自动交易状态同步:', this.autoExecuteSignals ? '✅ 启用' : '❌ 禁用')
+      }
+      if (this.isPaperTrading !== state.settings.paperTradingMode) {
+        this.isPaperTrading = state.settings.paperTradingMode
+        console.log('[TradingService] 交易模式同步:', this.isPaperTrading ? '📝 纸面交易' : '💰 真实交易')
+      }
+
+      this.scheduleAutoExitEvaluation()
+    })
+  }
+
+  private reconcilePositionsFromStore(state: ReturnType<typeof useAppStore.getState>): void {
+    const storePositions = state.positions.active || []
+    const storeTokenIds = new Set(storePositions.map(p => p.tokenId))
+
+    for (const p of storePositions) {
+      const existing = this.positions.get(p.tokenId)
+      const side: 'yes' | 'no' = (p.outcome || '').toLowerCase() === 'no' ? 'no' : 'yes'
+      if (!existing) {
+        this.positions.set(p.tokenId, {
+          tokenId: p.tokenId,
+          side,
+          entryPrice: p.entryPrice,
+          size: p.amount,
+          entryTime: p.openedAt,
+          unrealizedPnL: p.pnl,
+          realizedPnL: 0,
+        })
+      } else {
+        existing.side = side
+        existing.entryPrice = p.entryPrice
+        existing.size = p.amount
+        existing.entryTime = p.openedAt
+        existing.unrealizedPnL = p.pnl
+      }
+
+      if (!this.subscribedPositionTokens.has(p.tokenId)) {
+        realtimeService.subscribe([p.tokenId])
+        this.subscribedPositionTokens.add(p.tokenId)
+      }
+    }
+
+    for (const tokenId of Array.from(this.positions.keys())) {
+      if (!storeTokenIds.has(tokenId)) {
+        this.positions.delete(tokenId)
+      }
+    }
+
+    for (const tokenId of Array.from(this.subscribedPositionTokens.values())) {
+      if (!storeTokenIds.has(tokenId)) {
+        realtimeService.unsubscribe([tokenId])
+        this.subscribedPositionTokens.delete(tokenId)
+      }
+    }
+  }
+
+  private scheduleAutoExitEvaluation(): void {
+    if (this.autoExitTimer) clearTimeout(this.autoExitTimer)
+    this.autoExitTimer = setTimeout(() => {
+      this.autoExitTimer = null
+      this.evaluateAutoExitFromStore()
+    }, 300)
+  }
+
+  private evaluateAutoExitFromStore(): void {
+    const state = useAppStore.getState()
+    if (!state.settings.autoSellEnabled) return
+
+    const takeProfit = (state.settings.takeProfitPercent ?? 30) / 100
+    const stopLoss = (state.settings.stopLossPercent ?? 15) / 100
+
+    for (const p of state.positions.active || []) {
+      const entryValue = (p.entryPrice || 0) * (p.amount || 0)
+      const pnlPercent = entryValue > 0 ? (p.pnl || 0) / entryValue : 0
+
+      if (this.pendingAutoExits.has(p.tokenId)) continue
+      if (pnlPercent < takeProfit && pnlPercent > -stopLoss) continue
+
+      const internal = this.positions.get(p.tokenId)
+      if (!internal) {
+        this.positions.set(p.tokenId, {
+          tokenId: p.tokenId,
+          side: (p.outcome || '').toLowerCase() === 'no' ? 'no' : 'yes',
+          entryPrice: p.entryPrice,
+          size: p.amount,
+          entryTime: p.openedAt,
+          unrealizedPnL: p.pnl,
+          realizedPnL: 0,
+        })
+      }
+
+      this.pendingAutoExits.add(p.tokenId)
+      const reason = pnlPercent >= takeProfit ? 'take-profit' : 'stop-loss'
+      state.addActivityLog({
+        type: 'analysis',
+        message: `触发${reason === 'take-profit' ? '止盈' : '止损'}：${(pnlPercent * 100).toFixed(1)}%`,
+        data: { tokenId: p.tokenId, pnlPercent, entryPrice: p.entryPrice, currentPrice: p.currentPrice }
+      })
+      this.createOrder({
+        tokenId: p.tokenId,
+        side: 'SELL',
+        amount: p.amount,
+        orderType: 'FAK',
+        price: p.currentPrice,
+        maxSlippage: 0.02,
+        reason,
+      }).finally(() => {
+        this.pendingAutoExits.delete(p.tokenId)
+      })
+    }
   }
 
   // ============================================
@@ -156,6 +324,40 @@ export class TradingService {
     console.log('[TradingService] CLOB 客户端已设置')
   }
 
+  /**
+   * 获取符合条件的市场 (修复缺失方法)
+   */
+  async getEligibleMarkets(filter: MarketFilter): Promise<Market[]> {
+    try {
+      const scanResults = await this.marketScanner.scan()
+      return scanResults
+        .filter(result => {
+          if (!result.eligible) return false
+          
+          const market = result.market
+          
+          // 按底层资产过滤 (如 ETH, BTC)
+          if (filter.underlyings && filter.underlyings.length > 0) {
+            const matchesUnderlying = filter.underlyings.some(u => 
+              market.question.toUpperCase().includes(u.toUpperCase())
+            )
+            if (!matchesUnderlying) return false
+          }
+          
+          // 按周期过滤 (如 15m)
+          if (filter.duration) {
+            if (!market.question.includes(filter.duration)) return false
+          }
+          
+          return true
+        })
+        .map(result => result.market)
+    } catch (error) {
+      console.error('[TradingService] Failed to get eligible markets:', error)
+      return []
+    }
+  }
+
   // ============================================
   // 策略信号整合（新增）
   // ============================================
@@ -167,6 +369,12 @@ export class TradingService {
     this.strategyUnsubscribe = strategyManager.onSignal(async (signal: TradeSignal) => {
       console.log('[TradingService] 📊 收到策略信号:', signal.strategy, signal.reason)
 
+      // ✅ 记录信号日志到 Activity Feed
+      useAppStore.getState().addActivityLog({
+        type: 'signal',
+        message: `收到 ${signal.strategy} 信号: ${signal.action.toUpperCase()} @ ${(signal.price * 100).toFixed(1)}¢ (${signal.reason})`,
+      })
+
       // 检查是否启用自动交易
       if (!this.autoExecuteSignals) {
         console.log('[TradingService] 自动交易未启用，忽略信号')
@@ -175,8 +383,15 @@ export class TradingService {
 
       // 检查纸面交易模式
       if (!this.isPaperTrading) {
-        console.log('[TradingService] ⚠️ 真实交易模式下需要额外确认')
-        // 真实交易需要 LLM 确认等（后续集成）
+        console.log('[TradingService] ⚠️ 真实交易模式下启动 LLM 审核...')
+        
+        // 自动交易在真实模式下的前置审核
+        const isApproved = await this.approveTradeWithLLM(signal)
+        if (!isApproved) {
+          console.log('[TradingService] ❌ 真实交易信号被 LLM 否决')
+          return
+        }
+        console.log('[TradingService] ✅ LLM 审核通过，继续执行真实交易')
       }
 
       // 执行交易
@@ -193,18 +408,101 @@ export class TradingService {
    * 执行策略交易
    */
   private async executeStrategyTrade(signal: TradeSignal): Promise<OrderResult> {
+    // 1. 检查是否已有该资产的持仓（单市场持仓限制）
+    if (this.positions.has(signal.asset_id)) {
+      console.log(`[TradingService] 🚫 已持有资产 ${signal.asset_id} 的仓位，跳过重复下单`)
+      return { success: false, error: 'Position already exists' }
+    }
+
+    // 2. 价格限制检查
+    if (signal.price > this.MAX_BUY_PRICE) {
+      const msg = `🚫 信号价格 (${signal.price}) 超过最大买入限制 (${this.MAX_BUY_PRICE})，放弃接盘`
+      console.log(`[TradingService] ${msg}`)
+      useAppStore.getState().addActivityLog({ type: 'error', message: msg })
+      return { success: false, error: 'Price too high' }
+    }
+
+    // 3. 构建交易参数（先构建，再处理反向逻辑）
     const params: CreateOrderParams = {
       tokenId: signal.asset_id,
       side: signal.action === 'buy' ? 'BUY' : 'SELL',
       amount: signal.size,
       orderType: 'GTC',
       price: signal.price,
-      maxSlippage: 0.02,  // 2% 滑点
+      maxSlippage: 0.02,
       reason: signal.reason,
       signal: signal,
     }
 
+    // 4. 反向信号处理：买入对立面的 Token（而不是平仓 SELL）
+    if (this.REVERSE_SIGNALS) {
+      const store = useAppStore.getState()
+      const market = store.markets.activeMarkets.find(m => (m.assetIds || []).includes(signal.asset_id))
+      if (market && (market.assetIds?.length ?? 0) >= 2) {
+        const assetIds = market.assetIds || []
+        const currentIndex = assetIds.indexOf(signal.asset_id)
+        const otherIndex = currentIndex === 0 ? 1 : 0
+        const otherTokenId = assetIds[otherIndex]
+
+        params.tokenId = otherTokenId
+        params.side = 'BUY'
+        params.price = 1 - signal.price
+        params.reason = `[REVERSED] 原信号买入 ${currentIndex === 0 ? 'YES' : 'NO'}，现买入 ${otherIndex === 0 ? 'YES' : 'NO'}`
+
+        console.log(`[TradingService] 🔄 反向买入激活: ${signal.asset_id} -> ${otherTokenId} @ ${params.price}`)
+      }
+    }
+
+    // 5. 价格限制：用最终 params.price 进行检查
+    if ((params.price ?? 0) > this.MAX_BUY_PRICE) {
+      const msg = `🚫 信号价格 (${params.price}) 超过最大买入限制 (${this.MAX_BUY_PRICE})，放弃接盘`
+      console.log(`[TradingService] ${msg}`)
+      useAppStore.getState().addActivityLog({ type: 'error', message: msg })
+      return { success: false, error: 'Price too high' }
+    }
+
+    // 6. 单市场持仓限制：对最终 tokenId 做限制
+    if (this.positions.has(params.tokenId)) {
+      console.log(`[TradingService] 🚫 已持有资产 ${params.tokenId} 的仓位，跳过重复下单`)
+      return { success: false, error: 'Position already exists' }
+    }
+
     return await this.createOrder(params)
+  }
+
+  /**
+   * 使用 LLM 对真实交易进行二次审核 (增强安全性)
+   */
+  private async approveTradeWithLLM(signal: TradeSignal): Promise<boolean> {
+    try {
+      // 这里的 prompt 应该包含策略逻辑、信号原因和当前市场风险
+      const prompt = `
+        审核交易请求 (真实资金):
+        策略: ${signal.strategy}
+        操作: ${signal.action}
+        资产ID: ${signal.asset_id}
+        价格: ${signal.price}
+        仓位: ${signal.size}
+        原因: ${signal.reason}
+        
+        请评估该信号的合理性。如果该策略表现良好且逻辑清晰，请批准。
+        如果信号显得异常或风险过高，请否决。
+      `
+      
+      const response = await this.llmService.reason<{ approved: boolean, riskLevel: string }>({
+        system: "你是一个专业的交易风控专家。你的职责是审核自动化策略发出的交易信号，防止因策略 Bug 或极端行情导致的资金损失。",
+        prompt,
+        outputSchema: {
+          approved: { type: 'boolean' },
+          riskLevel: { type: 'enum', values: ['low', 'medium', 'high'] }
+        }
+      })
+      
+      return response.approved
+    } catch (error) {
+      console.error('[TradingService] LLM 审核异常，默认否决以保护资金:', error)
+      return false
+    }
   }
 
   // ============================================
@@ -310,6 +608,18 @@ export class TradingService {
   private executePaperTrade(params: CreateOrderParams): OrderResult {
     const orderId = `paper-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
+    const existingPosition = params.side === 'SELL' ? this.positions.get(params.tokenId) : undefined
+    const tradeValue = (params.price || 0.5) * params.amount
+    
+    // ✅ 扣除手续费 (Polymarket 2% per trade)
+    const tradingFee = tradeValue * this.TRADING_FEE_PERCENT
+    
+    // 计算已实现盈亏（扣除手续费）
+    const realizedPnL =
+      existingPosition && params.side === 'SELL'
+        ? tradeValue - existingPosition.entryPrice * Math.min(params.amount, existingPosition.size) - tradingFee
+        : -tradingFee  // 买入时只记录手续费成本
+
     // 创建订单记录
     const order: Order = {
       orderId,
@@ -329,8 +639,9 @@ export class TradingService {
     // ✅ 更新仓位（新增）
     this.updatePosition(order)
 
-    // ✅ 通知 Store（新增）
-    useAppStore.getState().addTrade({
+    // ✅ 通知 Store
+    const store = useAppStore.getState()
+    store.addTrade({
       id: orderId,
       marketId: params.tokenId,
       type: params.side.toLowerCase() as any,
@@ -338,9 +649,16 @@ export class TradingService {
       amount: params.amount,
       price: params.price || 0.5,
       timestamp: Date.now(),
+      pnl: params.side === 'SELL' ? realizedPnL : undefined,
     })
 
-    console.log('[TradingService] 📝 纸面交易完成:', orderId)
+    // ✅ 新增：记录 Activity Log（包含手续费）
+    store.addActivityLog({
+      type: 'trade',
+      message: `${params.side === 'BUY' ? '买入' : '卖出'} ${params.amount} 份 @ ${params.price || 0.5} | 手续费 ${tradingFee.toFixed(2)}${params.side === 'SELL' && typeof realizedPnL === 'number' ? ` | 净盈亏 ${realizedPnL >= 0 ? '+' : ''}${realizedPnL.toFixed(2)}` : ''} (原因: ${params.reason || '策略信号'})`,
+    })
+
+    console.log('[TradingService] 📝 纸面交易完成:', orderId, '手续费:', tradingFee.toFixed(2))
 
     return {
       success: true,
@@ -373,10 +691,11 @@ export class TradingService {
       // 获取价格（保留现有逻辑）
       let price = params.price
       if (!price) {
-        price = await this.getMarketPrice(params.tokenId, params.side)
-        if (!price) {
+        const fetchedPrice = await this.getMarketPrice(params.tokenId, params.side)
+        if (fetchedPrice == null) {
           return { success: false, error: 'Unable to get market price' }
         }
+        price = fetchedPrice
       }
 
       // 调整滑点（保留现有逻辑）
@@ -451,18 +770,38 @@ export class TradingService {
     const existingPosition = this.positions.get(order.tokenId)
 
     if (existingPosition) {
-      // 更新现有仓位
-      const avgPrice = (existingPosition.entryPrice * existingPosition.size + order.price * order.size) /
-                       (existingPosition.size + order.size)
-
-      existingPosition.entryPrice = avgPrice
-      existingPosition.size += order.size
-      existingPosition.entryTime = Date.now()
-    } else {
-      // 新建仓位
+      // ✅ 修复：如果是 SELL，减少仓位大小；如果是 BUY，增加仓位大小
+      if (order.side === 'BUY') {
+        const avgPrice = (existingPosition.entryPrice * existingPosition.size + order.price * order.size) /
+                         (existingPosition.size + order.size)
+        existingPosition.entryPrice = avgPrice
+        existingPosition.size += order.size
+      } else {
+        // 卖出时，计算已实现盈亏
+        // 对于 Polymarket 令牌，卖出即平仓
+        const priceDiff = order.price - existingPosition.entryPrice
+        const realizedPnL = priceDiff * order.size
+        
+        existingPosition.realizedPnL += realizedPnL
+        existingPosition.size -= order.size
+        
+        // 如果仓位清空，则记录已实现盈亏到 Store 并移除
+        if (existingPosition.size <= 0.0001) {
+          this.positions.delete(order.tokenId)
+          console.log('[TradingService] 仓位已完全清空:', order.tokenId)
+        }
+      }
+    } else if (order.side === 'BUY') {
+      // 只有买入时才新建仓位
+      const store = useAppStore.getState()
+      const market = store.markets.activeMarkets.find(m => (m.assetIds || []).includes(order.tokenId))
+      const side: 'yes' | 'no' =
+        market && market.assetIds
+          ? (market.assetIds.indexOf(order.tokenId) === 1 ? 'no' : 'yes')
+          : 'yes'
       this.positions.set(order.tokenId, {
         tokenId: order.tokenId,
-        side: order.side === 'BUY' ? 'yes' : 'no',
+        side,
         entryPrice: order.price,
         size: order.size,
         entryTime: Date.now(),
@@ -471,7 +810,20 @@ export class TradingService {
       })
     }
 
-    console.log('[TradingService] 仓位已更新:', order.tokenId)
+    // 同步到 Store 的 active 列表
+    const allActivePositions = Array.from(this.positions.values()).map(p => ({
+      tokenId: p.tokenId,
+      marketId: p.tokenId, // 简化处理
+      outcome: p.side,
+      amount: p.size,
+      entryPrice: p.entryPrice,
+      currentPrice: p.entryPrice, // 初始价格设为成本价
+      pnl: p.unrealizedPnL,
+      openedAt: p.entryTime,
+    }))
+    useAppStore.getState().updatePositions(allActivePositions)
+
+    console.log('[TradingService] 仓位已更新:', order.tokenId, '当前持仓数:', allActivePositions.length)
   }
 
   /**
@@ -488,18 +840,57 @@ export class TradingService {
     const position = this.positions.get(tokenId)
     if (!position) return
 
-    const priceDiff = currentPrice - position.entryPrice
-    const pnl = position.side === 'yes'
-      ? priceDiff * position.size
-      : -priceDiff * position.size
+    // ✅ 统一盈亏计算逻辑：(现价 - 成本价) * 数量
+    const pnl = (currentPrice - position.entryPrice) * position.size
 
     position.unrealizedPnL = pnl
 
-    // ✅ 更新 Store（新增）
+    // ✅ 更新 Store
+    const allPositions = Array.from(this.positions.values())
+    const totalUnrealized = allPositions.reduce((sum, p) => sum + p.unrealizedPnL, 0)
+    const totalRealized = allPositions.reduce((sum, p) => sum + p.realizedPnL, 0)
+    
     useAppStore.getState().updatePnl({
-      unrealized: Array.from(this.positions.values())
-        .reduce((sum, p) => sum + p.unrealizedPnL, 0),
+      unrealized: totalUnrealized,
+      total: totalUnrealized + totalRealized
     })
+
+    // 同步更新 Store 中的具体 Position 对象
+    useAppStore.getState().updatePosition(tokenId, {
+      currentPrice,
+      pnl
+    })
+
+    const state = useAppStore.getState()
+    if (!state.settings.autoSellEnabled) return
+
+    const entryValue = position.entryPrice * position.size
+    const pnlPercent = entryValue > 0 ? pnl / entryValue : 0
+    const takeProfit = (state.settings.takeProfitPercent ?? 30) / 100
+    const stopLoss = (state.settings.stopLossPercent ?? 15) / 100
+
+    if (this.pendingAutoExits.has(tokenId)) return
+
+    if (pnlPercent >= takeProfit || pnlPercent <= -stopLoss) {
+      this.pendingAutoExits.add(tokenId)
+      const reason = pnlPercent >= takeProfit ? 'take-profit' : 'stop-loss'
+      state.addActivityLog({
+        type: 'analysis',
+        message: `触发${reason === 'take-profit' ? '止盈' : '止损'}：${(pnlPercent * 100).toFixed(1)}%`,
+        data: { tokenId, pnlPercent, entryPrice: position.entryPrice, currentPrice }
+      })
+      this.createOrder({
+        tokenId,
+        side: 'SELL',
+        amount: position.size,
+        orderType: 'FAK',
+        price: currentPrice,
+        maxSlippage: 0.02,
+        reason,
+      }).finally(() => {
+        this.pendingAutoExits.delete(tokenId)
+      })
+    }
   }
 
   // ============================================
@@ -597,20 +988,31 @@ export class TradingService {
   // PnL 更新（新增）
   // ============================================
 
+  /**
+   * 启动 PnL 更新（新增）
+   */
   private startPnLUpdater(): void {
-    // 每 5 秒更新一次 PnL
     setInterval(() => {
-      this.updateAllPnL()
-    }, 5000)
-  }
+      this.positions.forEach((pos, tokenId) => {
+        const orderBook = realtimeService.getOrderBook(tokenId)
+        const bestBid = orderBook?.bids?.[0]?.[0] || 0
+        const bestAsk = orderBook?.asks?.[0]?.[0] || 0
+        const bookMid = bestBid > 0 && bestAsk > 0 ? (bestBid + bestAsk) / 2 : 0
+        const lastUpdate = realtimeService.getLastUpdate(tokenId)
+        const ageMs = lastUpdate ? Date.now() - lastUpdate : Number.POSITIVE_INFINITY
 
-  private updateAllPnL(): void {
-    for (const [tokenId, position] of this.positions.entries()) {
-      const orderBook = realtimeService.getOrderBook(tokenId)
-      if (orderBook && orderBook.midPrice) {
-        this.updatePositionPnL(tokenId, orderBook.midPrice)
-      }
-    }
+        let currentPrice = bookMid
+        if (!currentPrice || !Number.isFinite(currentPrice) || ageMs > 30000) {
+          const history = realtimeService.getPriceHistory(tokenId)
+          const lastPrice = history.length > 0 ? history[history.length - 1] : 0
+          currentPrice = lastPrice || bookMid || bestBid || bestAsk || pos.entryPrice
+        }
+
+        if (currentPrice > 0) {
+          this.updatePositionPnL(tokenId, currentPrice)
+        }
+      })
+    }, 5000)
   }
 
   // ============================================
