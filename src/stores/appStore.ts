@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 // ✅ 新增：导入 strategyManager（用于策略引擎控制）
 import { strategyManager } from '@/services/strategies'
+import type { PolymarketMarketMetadata } from '@/services/platforms/polymarketUtils'
 
 // ==========================================
 // 类型定义
@@ -154,6 +155,16 @@ export interface AppState {
     isRunning: boolean
     lastActiveAt?: number
   }
+
+  // ✅ 新增：Polymarket 常驻跟踪配置
+  polymarket: {
+    btc5m: {
+      metadata: PolymarketMarketMetadata | null
+      subscribed: boolean
+      isLoading: boolean
+      lastError: string | null
+    }
+  }
 }
 
 // ==========================================
@@ -217,6 +228,9 @@ interface AppStore extends AppState {
 
   // ✅ 新增：策略引擎 Action
   setStrategyRunning: (running: boolean) => void
+
+  // ✅ 新增：Polymarket BTC 5m 状态
+  setPolymarketBtc5mState: (patch: Partial<AppState['polymarket']['btc5m']>) => void
 }
 
 // ==========================================
@@ -281,6 +295,15 @@ const initialState: AppState = {
   strategy: {
     isRunning: false,
     lastActiveAt: undefined
+  },
+  // ✅ 新增：Polymarket 常驻标的初始状态
+  polymarket: {
+    btc5m: {
+      metadata: null,
+      subscribed: false,
+      isLoading: false,
+      lastError: null,
+    },
   }
 }
 
@@ -775,7 +798,7 @@ export const useAppStore = create<AppStore>()(
       // ✅ 新增：策略引擎 Action
       // ==========================================
       setStrategyRunning: (running) => {
-        console.log('🤖 [Store] setStrategyRunning:', running)
+        console.log(' [Store] setStrategyRunning:', running)
 
         // 调用 strategyManager 实际启动/停止
         if (running) {
@@ -795,28 +818,36 @@ export const useAppStore = create<AppStore>()(
             isActive: running // 同步自动交易状态
           }
         })
+      },
+
+      // ✅ 新增：Polymarket BTC 5m 状态
+      setPolymarketBtc5mState: (patch) => {
+        set((state) => ({
+          polymarket: {
+            ...state.polymarket,
+            btc5m: {
+              ...state.polymarket.btc5m,
+              ...patch,
+            }
+          }
+        }))
       }
     }),
     {
-      name: 'polymarket-bot-storage',
+      name: 'pmbot-store',
       partialize: (state) => ({
-        // 只持久化必要的数据
+        wallet: state.wallet,
+        markets: state.markets,
+        positions: state.positions,
+        trading: state.trading,
+        llm: state.llm,
+        api: state.api,
         settings: state.settings,
-        wallet: {
-          address: state.wallet.address,
-          chainId: state.wallet.chainId
-        },
-        api: {
-          selectedProvider: state.api.selectedProvider,
-          configs: state.api.configs
-        },
-        // ✅ 新增：持久化策略状态（刷新页面后保持）
-        strategy: {
-          isRunning: state.strategy.isRunning,
-          lastActiveAt: state.strategy.lastActiveAt
-        }
+        ui: state.ui,
+        strategy: state.strategy,
+        polymarket: state.polymarket,
       }),
-      version: 1
+      version: 1,
     }
   )
 )

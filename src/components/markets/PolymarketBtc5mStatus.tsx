@@ -5,6 +5,7 @@ import { formatCurrency } from '@/utils/formatting'
 import { useAppStore } from '@/stores/appStore'
 import { realtimeService } from '@/services/realtime/RealtimeService'
 import { binanceBtcService } from '@/services/marketdata/BinanceBtcService'
+import type { PolymarketMarketMetadata } from '@/services/platforms/polymarketUtils'
 
 type StatusSnapshot = {
   updatedAtMs: number
@@ -32,13 +33,27 @@ type StatusSnapshot = {
 }
 
 export const PolymarketBtc5mStatus: React.FC = () => {
-  const { ui, markets, positions, trading } = useAppStore()
+  const { ui, polymarket } = useAppStore()
   const [snap, setSnap] = React.useState<StatusSnapshot | null>(null)
+  const [connectionStatus, setConnectionStatus] = React.useState<string>('disconnected')
+  const metadata = polymarket.btc5m.metadata
+  const subscribed = polymarket.btc5m.subscribed
+  const subscriptionError = polymarket.btc5m.lastError
+
+  // ✅ 监听 WebSocket 连接状态
+  React.useEffect(() => {
+    const unsubscribe = realtimeService.onConnectionChange((status) => {
+      setConnectionStatus(status)
+    })
+    return unsubscribe
+  }, [])
 
   React.useEffect(() => {
     if (ui.currentView !== 'markets-polymarket') return
 
     let alive = true
+    let debugCount = 0
+    
     const timer = setInterval(async () => {
       try {
         const state = await binanceBtcService.getBtc5mState()
@@ -48,10 +63,36 @@ export const PolymarketBtc5mStatus: React.FC = () => {
           return
         }
 
-        const market = pickBtc5mMarket(markets.activeMarkets || [])
-        const yesTokenId = market?.assetIds?.[0] || null
-        const noTokenId = market?.assetIds?.[1] || null
-        const marketLabel = market?.question || 'BTC 5m'
+        // ✅ 核心修复：在 interval 内部重新获取最新的 Store 状态
+        // 不能使用闭包中的 markets.activeMarkets，因为它可能是过时的
+        const currentStore = useAppStore.getState()
+        const currentActiveMarkets = currentStore.markets.activeMarkets || []
+        const currentMetadata = currentStore.polymarket.btc5m.metadata
+
+        // ✅ 使用 metadata 获取 token IDs
+        const yesTokenId = currentMetadata?.assetIds?.[0] || null
+        const noTokenId = currentMetadata?.assetIds?.[1] || null
+        const marketLabel = currentMetadata?.question || 'BTC 5m'
+
+        // 查找 activeMarkets 中匹配的市场（用于获取实时价格）
+        const matchingMarket = currentActiveMarkets.find(m => 
+          m.assetIds?.includes(yesTokenId!) || m.assetIds?.includes(noTokenId!)
+        )
+
+        // ✅ 调试
+        const subscribedAssets = realtimeService.getSubscribedAssets()
+        
+        debugCount++
+        if (debugCount <= 5 || debugCount % 10 === 0) {
+          console.log('[BTC5mStatus] 数据来源:', {
+            activeMarketsCount: currentActiveMarkets.length,
+            metadata: currentMetadata ? { question: currentMetadata.question?.substring(0, 40) } : null,
+            matchingMarket: matchingMarket ? { question: matchingMarket.question?.substring(0, 40), outcomePrices: matchingMarket.outcomePrices } : null,
+            yesTokenId: yesTokenId?.substring(0, 20) + '...',
+            subscribedCount: subscribedAssets.length,
+            wsStatus: realtimeService.getStatus(),
+          })
+        }
 
         const now = Date.now()
         const elapsedSec = clamp((now - state.startTimeMs) / 1000, 0, 300)
@@ -62,16 +103,68 @@ export const PolymarketBtc5mStatus: React.FC = () => {
         const z = sigmaRem > 0 ? delta / sigmaRem : 0
         const pYes = normalCdf(z)
 
-        const oYes = yesTokenId ? bestAsk(yesTokenId) : null
-        const oNo = noTokenId ? bestAsk(noTokenId) : null
+        // ✅ 核心修复：直接从 matchingMarket.outcomePrices 获取价格
+        // 这与 MARKETS 面板使用相同的数据源，确保同步
+        let oYes: number | null = null
+        let oNo: number | null = null
+
+        // 🔍 调试：检查 matchingMarket 的完整结构
+        if (debugCount <= 5 || debugCount % 10 === 0) {
+          console.log('[BTC5mStatus] matchingMarket 数据:', {
+            found: !!matchingMarket,
+            question: matchingMarket?.question?.substring(0, 40),
+            outcomePrices: matchingMarket?.outcomePrices,
+          })
+        }
+
+        // 方法1: 从 matchingMarket.outcomePrices 获取（与 MARKETS 面板同步）
+        if (matchingMarket?.outcomePrices && matchingMarket.outcomePrices.length >= 2) {
+          const rawYes = matchingMarket.outcomePrices[0]
+          const rawNo = matchingMarket.outcomePrices[1]
+          const yesPrice = typeof rawYes === 'string' ? parseFloat(rawYes) : rawYes
+          const noPrice = typeof rawNo === 'string' ? parseFloat(rawNo) : rawNo
+          
+          if (debugCount <= 5 || debugCount % 10 === 0) {
+            console.log('[BTC5mStatus] outcomePrices 解析:', {
+              rawYes, rawNo,
+              parsedYes: yesPrice,
+              parsedNo: noPrice,
+            })
+          }
+          
+          if (!isNaN(yesPrice) && yesPrice > 0) oYes = yesPrice
+          if (!isNaN(noPrice) && noPrice > 0) oNo = noPrice
+        }
+        
+        // 方法2: 备选 - 从 realtimeService 获取
+        if (oYes === null && yesTokenId) {
+          oYes = bestAsk(yesTokenId)
+          if (debugCount <= 5) console.log('[BTC5mStatus] ⚠️ YES 使用 realtimeService fallback:', oYes)
+        }
+        if (oNo === null && noTokenId) {
+          oNo = bestAsk(noTokenId)
+          if (debugCount <= 5) console.log('[BTC5mStatus] ⚠️ NO 使用 realtimeService fallback:', oNo)
+        }
+
+        if (debugCount <= 5 || debugCount % 10 === 0) {
+          console.log('[BTC5mStatus] 最终价格:', { oYes, oNo, pYes: pYes.toFixed(3) })
+        }
+
         const edgeYes = oYes != null ? pYes - oYes : null
         const edgeNo = oNo != null ? (1 - pYes) - oNo : null
 
-        const orderbookAgeYesSec = yesTokenId ? ageSec(realtimeService.getLastUpdate(yesTokenId)) : null
-        const orderbookAgeNoSec = noTokenId ? ageSec(realtimeService.getLastUpdate(noTokenId)) : null
+        // ✅ 如果从 Store 获取价格，age 显示为 0（实时）
+        // 只有当 fallback 到 realtimeService 时才显示真实的 age
+        const usingStorePrice = matchingMarket?.outcomePrices && matchingMarket.outcomePrices.length >= 2
+        const orderbookAgeYesSec = usingStorePrice ? 0 : (yesTokenId ? ageSec(realtimeService.getLastUpdate(yesTokenId)) : null)
+        const orderbookAgeNoSec = usingStorePrice ? 0 : (noTokenId ? ageSec(realtimeService.getLastUpdate(noTokenId)) : null)
 
-        const realizedPnl = sumRealized(trading.tradeHistory || [], state.startTimeMs, state.startTimeMs + 300_000)
-        const unrealizedPnl = sumUnrealized(positions.active || [], yesTokenId, noTokenId)
+        // ✅ 从 Store 获取最新的 trading 和 positions 状态
+        const currentTrading = currentStore.trading
+        const currentPositions = currentStore.positions
+
+        const realizedPnl = sumRealized(currentTrading.tradeHistory || [], state.startTimeMs, state.startTimeMs + 300_000)
+        const unrealizedPnl = sumUnrealized(currentPositions.active || [], yesTokenId, noTokenId)
 
         setSnap({
           updatedAtMs: state.updatedAtMs,
@@ -97,7 +190,8 @@ export const PolymarketBtc5mStatus: React.FC = () => {
           realizedPnl,
           unrealizedPnl,
         })
-      } catch {
+      } catch (err) {
+        console.error('[BTC5mStatus] 更新错误:', err)
         if (!alive) return
       }
     }, 1000)
@@ -106,13 +200,17 @@ export const PolymarketBtc5mStatus: React.FC = () => {
       alive = false
       clearInterval(timer)
     }
-  }, [ui.currentView, markets.activeMarkets, positions.active, trading.tradeHistory])
+  }, [ui.currentView]) // ✅ 简化 dependencies，因为我们在 interval 内部获取最新状态
 
   if (ui.currentView !== 'markets-polymarket') return null
 
+  // ✅ 检查是否有 BTC 5m 市场数据
+  const hasMetadata = !!metadata?.assetIds?.length
+  const wsConnected = connectionStatus === 'connected'
+
   return (
     <MatrixCard
-      title="📈 BTC 5m STATUS"
+      title="📈 BTC 5M STATUS"
       subtitle={snap ? snap.marketLabel : 'No data'}
       headerExtra={
         <div className="text-[10px] text-matrix-text-secondary font-mono text-right">
@@ -121,8 +219,22 @@ export const PolymarketBtc5mStatus: React.FC = () => {
         </div>
       }
     >
+      {/* ✅ 显示连接状态提示 */}
+      {!wsConnected && hasMetadata && (
+        <div className="text-matrix-warning font-mono text-sm mb-2">
+          ⚠️ WebSocket 未连接，请点击 CONNECT 并订阅 BTC 5m 市场
+        </div>
+      )}
+      {!hasMetadata && (
+        <div className="text-matrix-warning font-mono text-sm mb-2">
+          ⚠️ 未找到 BTC 5m 市场数据
+        </div>
+      )}
+      
       {!snap ? (
-        <div className="text-matrix-text-muted font-mono text-sm">等待 BTC 与盘口数据…</div>
+        <div className="text-matrix-text-muted font-mono text-sm">
+          {subscriptionError ? `订阅失败: ${subscriptionError}` : subscribed ? '等待 BTC 与盘口数据…' : '尚未订阅 BTC 5m 市场'}
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
           <Box title="MODEL">
@@ -155,6 +267,11 @@ export const PolymarketBtc5mStatus: React.FC = () => {
             <Row k="Unrealized" v={formatCurrency(snap.unrealizedPnl)} vClass={snap.unrealizedPnl >= 0 ? 'text-matrix-success' : 'text-matrix-error'} />
             <Row k="Start" v={snap.startPrice.toFixed(2)} />
             <Row k="Now" v={snap.currentPrice.toFixed(2)} />
+            <Row
+              k="Δ price"
+              v={(snap.currentPrice - snap.startPrice).toFixed(2)}
+              vClass={snap.currentPrice >= snap.startPrice ? 'text-matrix-success' : 'text-matrix-error'}
+            />
             <Row k="t" v={`${Math.round(snap.elapsedSec)}s / 300s`} />
           </Box>
         </div>
@@ -181,25 +298,40 @@ const Row: React.FC<{ k: string; v: string; vClass?: string }> = ({ k, v, vClass
   )
 }
 
-function pickBtc5mMarket(markets: Array<{ question?: string; assetIds?: string[] }>): { question?: string; assetIds?: string[] } | null {
-  for (const m of markets) {
-    const q = (m.question || '').toLowerCase()
-    const isBtc = q.includes('bitcoin') || q.includes('btc')
-    const is5m = /(5\s*(min|m)\b|5-minute)/i.test(q)
-    if (isBtc && is5m && (m.assetIds?.length || 0) >= 2) return m
-  }
-  return null
-}
-
 function bestAsk(tokenId: string): number | null {
   const book = realtimeService.getOrderBook(tokenId)
-  const ask = book?.asks?.[0]?.[0] || 0
-  if (ask > 0 && ask < 1) return ask
-  if (ask > 1 && ask <= 100) return ask / 100
   const history = realtimeService.getPriceHistory(tokenId)
-  const last = history.length > 0 ? history[history.length - 1] : 0
-  if (last > 0 && last < 1) return last
-  if (last > 1 && last <= 100) return last / 100
+  const lastUpdate = realtimeService.getLastUpdate(tokenId) || 0
+  
+  // 获取订单簿的 best ask
+  let bookAsk: number | null = null
+  let bookTime = 0
+  if (book?.asks && book.asks.length > 0) {
+    const ask = book.asks[0][0]
+    if (ask > 0 && ask < 1) bookAsk = ask
+    else if (ask > 1 && ask <= 100) bookAsk = ask / 100
+    bookTime = book.last_update || 0
+  }
+  
+  // 获取价格历史的最新价格
+  let historyPrice: number | null = null
+  if (history.length > 0) {
+    const last = history[history.length - 1]
+    if (last > 0 && last < 1) historyPrice = last
+    else if (last > 1 && last <= 100) historyPrice = last / 100
+  }
+  
+  // ✅ 核心修复：优先使用 priceHistory（因为它被 price_change 消息实时更新）
+  // 订单簿数据只在初始连接时收到，之后不再更新
+  if (historyPrice !== null) {
+    return historyPrice
+  }
+  
+  // fallback 到订单簿
+  if (bookAsk !== null) {
+    return bookAsk
+  }
+  
   return null
 }
 
@@ -242,4 +374,3 @@ function erf(x: number): number {
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v))
 }
-
