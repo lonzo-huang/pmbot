@@ -327,7 +327,13 @@ export class RealtimeService {
     assetIds.forEach(id => {
       const count = this.subscribedAssets.get(id) || 0
       this.subscribedAssets.set(id, count + 1)
-      if (count === 0) newAssets.push(id)
+      if (count === 0) {
+        newAssets.push(id)
+        // ✅ 清空新订阅 asset 的历史记录，避免价格跳变被误过滤
+        this.priceHistory.delete(id)
+        this.orderBooks.delete(id)
+        this.lastUpdates.delete(id)
+      }
     })
 
     console.log(`[RealtimeService] ➕ 订阅资产请求: ${assetIds.length} 个 (新订阅: ${newAssets.length})`)
@@ -615,8 +621,10 @@ export class RealtimeService {
       if (history.length > 0) {
         const lastPrice = history[history.length - 1]
         const change = Math.abs(marketPrice - lastPrice) / lastPrice
-        if (change > 0.5 && lastPrice > 0.05) {
-          console.warn(`[RealtimeService] ⚠️ 价格波动过大被过滤: ${lastPrice} -> ${marketPrice}`)
+        // ✅ 放宽条件：只在历史记录足够多时（>5条）才过滤，允许新市场有大幅价格变化
+        // 同时提高阈值到 80%，减少误过滤
+        if (change > 0.8 && lastPrice > 0.05 && history.length > 5) {
+          console.warn(`[RealtimeService] ⚠️ 价格波动过大被过滤: ${lastPrice} -> ${marketPrice} (change=${(change*100).toFixed(1)}%)`)
           return null
         }
       }
@@ -715,7 +723,9 @@ export class RealtimeService {
       const history = this.priceHistory.get(assetId) || []
       
       const lastPrice = history.length > 0 ? history[history.length - 1] : null
-      if (lastPrice && Math.abs(price - lastPrice) / lastPrice > 0.3) {
+      // ✅ 修复：只在历史记录足够多时（>3条）才过滤，允许新市场的初始价格
+      // 同时提高阈值到 80%
+      if (lastPrice && history.length > 3 && Math.abs(price - lastPrice) / lastPrice > 0.8) {
         console.warn(`[RealtimeService] ⚠️ 价格跳变过大: ${lastPrice} -> ${price}, 跳过更新`)
       } else {
         history.push(price)

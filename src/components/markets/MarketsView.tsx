@@ -18,6 +18,7 @@ import { PopularMarkets } from './PopularMarkets'
 import { TestPositionModal } from './TestPositionModal'
 import { ConnectionLog } from './ConnectionLog'
 import { PolymarketBtc5mStatus } from './PolymarketBtc5mStatus'
+import { btc5mAutoStrategy } from '@/services/strategies/Btc5mAutoStrategy'
 import {
   BTC_5M_EVENT_URL,
   BTC_5M_DEFAULT_METADATA,
@@ -210,10 +211,33 @@ export const MarketsView: React.FC = () => {
       addLog(`📊 [${signal.strategy}] ${signal.action.toUpperCase()} ${signal.side.toUpperCase()} @ ${(signal.price * 100).toFixed(1)}¢`)
     })
 
+    // ✅ 监听 BTC 5m 自动策略信号
+    const btc5mUnsubscribe = btc5mAutoStrategy.onSignal((signal) => {
+      // 转换为 TradeSignal 格式
+      const tradeSignal: TradeSignal = {
+        strategy: 'BTC5mAuto',
+        asset_id: signal.side === 'yes' 
+          ? useAppStore.getState().polymarket.btc5m.metadata?.assetIds?.[0] || ''
+          : useAppStore.getState().polymarket.btc5m.metadata?.assetIds?.[1] || '',
+        action: signal.type === 'BUY_YES' || signal.type === 'BUY_NO' ? 'buy' : 'hold',
+        side: signal.side || 'yes',
+        price: signal.oMarket,
+        size: signal.suggestedSize,
+        confidence: signal.confidence,
+        reason: signal.reason,
+        timestamp: signal.timestamp,
+      }
+      setTradeSignals(prev => [tradeSignal, ...prev.slice(0, 19)])
+      
+      const icon = signal.type === 'BUY_YES' ? '🟢' : '🔴'
+      addLog(`${icon} [BTC5mAuto] ${signal.type} edge=${(signal.edge * 100).toFixed(1)}% 建议: $${signal.suggestedSize}`)
+    })
+
     checkExistingConnection()
 
     return () => {
       strategyUnsubscribe()
+      btc5mUnsubscribe()
     }
   }, [])
 
@@ -239,8 +263,8 @@ export const MarketsView: React.FC = () => {
       // 找到包含此 assetId 的市场
       const marketIndex = currentMarkets.findIndex(m => m.assetIds?.includes(assetId))
       if (marketIndex === -1) {
-        // 调试：打印未匹配的资产 ID
-        console.log(`[MarketsView] ⚠️ 未找到匹配的市场，asset_id: ${assetId.substring(0, 20)}...`)
+        // ✅ 只在首次遇到未知 assetId 时打印警告，避免日志刷屏
+        // 这通常发生在区间切换后，旧的订阅还在发送消息
         return
       }
 
@@ -657,13 +681,206 @@ export const MarketsView: React.FC = () => {
     return () => clearInterval(checkInterval)
   }, [scanStatus, activeMarkets])
 
+  // ✅ 新增：自动切换 BTC 5分钟市场 - 更健壮的实现
+  const lastBtc5mSlugRef = useRef<string | null>(null)
+  const lastBtc5mAssetIdsRef = useRef<string[] | null>(null)
+  const switchingRef = useRef<boolean>(false)  // 防止重复切换
+  
+  // ✅ 辅助函数：确保订阅成功
+  const ensureSubscribed = async (assetIds: string[], maxRetries = 3): Promise<boolean> => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      // 先清空旧订阅
+      realtimeService.clearSubscriptions()
+      await new Promise(r => setTimeout(r, 100))
+      
+      // 订阅新 assets
+      realtimeService.subscribe(assetIds)
+      await new Promise(r => setTimeout(r, 200))
+      
+      // 验证订阅
+      const subscribed = realtimeService.getSubscribedAssets()
+      const allSubscribed = assetIds.every(id => subscribed.includes(id))
+      
+      if (allSubscribed) {
+        console.log(`[MarketsView] ✅ 订阅验证成功 (尝试 ${attempt})`)
+        return true
+      }
+      
+      console.log(`[MarketsView] ⚠️ 订阅验证失败 (尝试 ${attempt}/${maxRetries})`)
+      console.log(`[MarketsView]   期望: ${assetIds.map(id => id.substring(0, 12) + '...')}`)
+      console.log(`[MarketsView]   实际: ${subscribed.map(id => id.substring(0, 12) + '...')}`)
+    }
+    
+    return false
+  }
+  
+  useEffect(() => {
+    if (scanStatus !== 'connected') return
+
+    // ✅ 每 1 秒检查一次（更快响应）
+    const checkBtc5mInterval = setInterval(async () => {
+      // 防止重复切换
+      if (switchingRef.current) return
+      
+      try {
+        // 获取当前5分钟区间的 slug
+        const currentUrl = getCurrentBtc5mUrl()
+        const slugResult = extractSlugFromUrl(currentUrl)
+        const currentSlug = typeof slugResult === 'string' ? slugResult : slugResult?.slug
+        
+        if (!currentSlug) return
+
+        // 首次初始化
+        if (!lastBtc5mSlugRef.current) {
+          lastBtc5mSlugRef.current = currentSlug
+          console.log(`[MarketsView] 🏁 初始化 BTC 5m slug: ${currentSlug}`)
+          
+          // 同时初始化 assetIds
+          const store = useAppStore.getState()
+          const btc5m = (store.markets.activeMarkets || []).find(m => 
+            m.slug?.startsWith('btc-updown-5m') ||
+            (m.question?.toLowerCase().includes('bitcoin up or down') &&
+            (m.question?.includes('AM') || m.question?.includes('PM')))
+          )
+          if (btc5m?.assetIds) {
+            lastBtc5mAssetIdsRef.current = btc5m.assetIds
+            console.log(`[MarketsView] 🏁 初始化 assetIds:`, btc5m.assetIds.map(id => id.substring(0, 12) + '...'))
+            
+            // ✅ 验证初始订阅状态
+            const subscribed = realtimeService.getSubscribedAssets()
+            if (!btc5m.assetIds.every(id => subscribed.includes(id))) {
+              console.log(`[MarketsView] 🔧 初始订阅不完整，正在修复...`)
+              await ensureSubscribed(btc5m.assetIds)
+            }
+          }
+          return
+        }
+
+        // ✅ 检查是否切换到新的5分钟区间
+        if (lastBtc5mSlugRef.current !== currentSlug) {
+          console.log(`\n[MarketsView] 🔄🔄🔄 检测到 BTC 5m 区间切换 🔄🔄🔄`)
+          console.log(`[MarketsView]   旧 Slug: ${lastBtc5mSlugRef.current}`)
+          console.log(`[MarketsView]   新 Slug: ${currentSlug}`)
+          
+          switchingRef.current = true  // 标记正在切换
+          
+          try {
+            // 1. 获取最新的 Store 状态
+            const currentStore = useAppStore.getState()
+            const currentActiveMarkets = currentStore.markets.activeMarkets || []
+            
+            // 2. 查找当前的 BTC 5m 市场
+            const btc5mMarket = currentActiveMarkets.find(m => 
+              m.slug?.startsWith('btc-updown-5m') ||
+              (m.question?.toLowerCase().includes('bitcoin up or down') &&
+              (m.question?.includes('AM') || m.question?.includes('PM')))
+            )
+            
+            console.log(`[MarketsView] 当前 BTC 5m 市场:`, btc5mMarket?.question || 'not found')
+
+            // 3. 获取新的市场数据
+            console.log(`[MarketsView] 📡 正在获取新市场数据: ${currentSlug}`)
+            const newData = await fetchMarketDataFromSlug(currentSlug, 'btc-5m', { 
+              logger: (msg) => console.log('[MarketsView]', msg) 
+            })
+            
+            if (!newData) {
+              console.log(`[MarketsView] ❌ 无法获取新市场数据，保持当前状态`)
+              lastBtc5mSlugRef.current = currentSlug  // 更新 slug 避免重复尝试
+              return
+            }
+            
+            console.log(`[MarketsView] ✅ 获取到新市场: ${newData.question}`)
+            console.log(`[MarketsView]   新 assetIds:`, newData.assetIds?.map(id => id.substring(0, 12) + '...'))
+
+            // 4. 更新市场列表
+            let updatedMarkets: Market[]
+            if (btc5mMarket) {
+              // 替换现有市场
+              updatedMarkets = currentActiveMarkets.map(m => {
+                if (m.id === btc5mMarket.id || m.slug?.startsWith('btc-updown-5m')) {
+                  return {
+                    ...m,
+                    id: newData.id,
+                    conditionId: newData.conditionId,
+                    question: newData.question,
+                    slug: newData.slug,
+                    assetIds: newData.assetIds,
+                    endDate: newData.endDate,
+                    volume: newData.volume,
+                    liquidity: newData.liquidity,
+                    outcomePrices: [0.5, 0.5],  // 重置价格
+                  }
+                }
+                return m
+              })
+            } else {
+              // 添加新市场
+              const newMarket = toMarket(newData)
+              updatedMarkets = [...currentActiveMarkets, newMarket]
+            }
+
+            // 5. ✅ 更新 Store
+            console.log(`[MarketsView] 💾 更新 Store...`)
+            useAppStore.getState().setMarkets(updatedMarkets)
+            
+            // 6. 更新 polymarket btc5m metadata
+            useAppStore.getState().setPolymarketBtc5mState({
+              metadata: newData,
+              subscribed: true,
+            })
+
+            // 7. ✅ 确保订阅成功（带重试）
+            if (newData.assetIds && newData.assetIds.length > 0) {
+              console.log(`[MarketsView] 📡 订阅新 assets...`)
+              const subscribeSuccess = await ensureSubscribed(newData.assetIds)
+              
+              if (subscribeSuccess) {
+                // 更新 ref
+                lastBtc5mAssetIdsRef.current = newData.assetIds
+                lastBtc5mSlugRef.current = currentSlug
+                
+                console.log(`[MarketsView] ✅✅✅ 切换完成: ${newData.question} ✅✅✅\n`)
+                addNotification(`已切换到: ${newData.question}`, 'success')
+                addLog(`🔄 已切换到: ${newData.question}`)
+              } else {
+                console.error(`[MarketsView] ❌ 订阅失败，请手动刷新页面`)
+                addNotification(`切换失败，请刷新页面`, 'error')
+              }
+            }
+            
+          } catch (switchErr) {
+            console.error('[MarketsView] ❌ 切换过程出错:', switchErr)
+            lastBtc5mSlugRef.current = currentSlug  // 更新 slug 避免重复尝试
+          } finally {
+            switchingRef.current = false  // 解除切换锁定
+          }
+        }
+        
+      } catch (err) {
+        console.error('[MarketsView] BTC 5m 检查失败:', err)
+        switchingRef.current = false
+      }
+    }, 1000)  // ✅ 每 1 秒检查一次
+
+    return () => clearInterval(checkBtc5mInterval)
+  }, [scanStatus, addNotification, addLog])
+
   const toggleStrategy = () => {
     if (isStrategyRunning) {
+      // 停止策略
+      btc5mAutoStrategy.stop()
       setStrategyRunning(false)
       addLog('⏹️ Strategy engine stopped')
     } else {
+      // 启动策略
+      const store = useAppStore.getState()
+      btc5mAutoStrategy.updateConfig({
+        bankroll: store.trading?.capital || 1000,
+      })
+      btc5mAutoStrategy.start(1000)
       setStrategyRunning(true)
-      addLog('🚀 Strategy engine started')
+      addLog('🚀 BTC 5m Auto Strategy started (edge > 5%, Kelly ≤ 25%)')
     }
   }
 
