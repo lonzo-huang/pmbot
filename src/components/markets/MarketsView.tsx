@@ -22,6 +22,7 @@ import { btc5mAutoStrategy } from '@/services/strategies/Btc5mAutoStrategy'
 import {
   BTC_5M_EVENT_URL,
   BTC_5M_DEFAULT_METADATA,
+  BTC_5M_SERIES_SLUG,
   extractSlugFromUrl,
   fetchMarketDataFromSlug,
   toMarket,
@@ -307,7 +308,6 @@ export const MarketsView: React.FC = () => {
         updatedMarkets[marketIndex] = {
           ...market,
           outcomePrices: updatedPrices,
-          lastTradePrice: newPrice,
         }
 
         // ✅ 更新 Store
@@ -686,8 +686,8 @@ export const MarketsView: React.FC = () => {
   const lastBtc5mAssetIdsRef = useRef<string[] | null>(null)
   const switchingRef = useRef<boolean>(false)  // 防止重复切换
   
-  // ✅ 辅助函数：确保订阅成功
-  const ensureSubscribed = async (assetIds: string[], maxRetries = 3): Promise<boolean> => {
+  // ✅ 辅助函数：确保订阅成功 - 使用 useCallback 避免闭包问题
+  const ensureSubscribed = useCallback(async (assetIds: string[], maxRetries = 3): Promise<boolean> => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       // 先清空旧订阅
       realtimeService.clearSubscriptions()
@@ -712,7 +712,7 @@ export const MarketsView: React.FC = () => {
     }
     
     return false
-  }
+  }, [])
   
   useEffect(() => {
     if (scanStatus !== 'connected') return
@@ -780,9 +780,20 @@ export const MarketsView: React.FC = () => {
 
             // 3. 获取新的市场数据
             console.log(`[MarketsView] 📡 正在获取新市场数据: ${currentSlug}`)
-            const newData = await fetchMarketDataFromSlug(currentSlug, 'btc-5m', { 
+            
+            // ✅ 修复：先尝试用 event slug 获取所有市场，然后筛选当前区间
+            let newData = await fetchMarketDataFromSlug(currentSlug, 'market', { 
               logger: (msg) => console.log('[MarketsView]', msg) 
             })
+            
+            // 如果直接查询失败，尝试用 event slug 查询
+            if (!newData) {
+              console.log(`[MarketsView] ⚠️ 直接查询失败，尝试用 event slug 查询...`)
+              const eventSlug = BTC_5M_SERIES_SLUG // 'btc-updown-5m'
+              newData = await fetchMarketDataFromSlug(eventSlug, 'event', { 
+                logger: (msg) => console.log('[MarketsView]', msg) 
+              })
+            }
             
             if (!newData) {
               console.log(`[MarketsView] ❌ 无法获取新市场数据，保持当前状态`)
@@ -864,7 +875,7 @@ export const MarketsView: React.FC = () => {
     }, 1000)  // ✅ 每 1 秒检查一次
 
     return () => clearInterval(checkBtc5mInterval)
-  }, [scanStatus, addNotification, addLog])
+  }, [scanStatus, addNotification, addLog, ensureSubscribed])
 
   const toggleStrategy = () => {
     if (isStrategyRunning) {
@@ -876,7 +887,7 @@ export const MarketsView: React.FC = () => {
       // 启动策略
       const store = useAppStore.getState()
       btc5mAutoStrategy.updateConfig({
-        bankroll: store.trading?.capital || 1000,
+        bankroll: 1000,
       })
       btc5mAutoStrategy.start(1000)
       setStrategyRunning(true)
